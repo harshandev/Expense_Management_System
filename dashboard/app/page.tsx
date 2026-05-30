@@ -30,7 +30,7 @@ type Tab = typeof TABS[number];
 interface Summary {
   total:number; count:number; prevTotal:number; momChange:number;
   healthScore:number; dailyAvg:number; projectedEnd:number;
-  maxExpense:number; avgExpense:number; month:string;
+  maxExpense:number; avgExpense:number; month:string; yearMonth:string;
   categoryChart:{name:string;value:number}[];
   trend:{date:string;amount:number}[];
   heatmap:{day:string;amount:number}[];
@@ -98,15 +98,28 @@ export default function Dashboard() {
   }]);
   const [input,      setInput]      = useState("");
   const [chatBusy,   setChatBusy]   = useState(false);
+  const [selMonth,   setSelMonth]   = useState(()=>new Date().toISOString().slice(0,7)); // "YYYY-MM"
   const chatEnd = useRef<HTMLDivElement>(null);
 
-  const load = () => {
+  const currentMonth = new Date().toISOString().slice(0,7);
+
+  const load = (month?: string) => {
     setLoading(true);
-    fetch("/api/summary").then(r=>r.json()).then(d=>{setData(d);setLoading(false);});
+    const m = month ?? selMonth;
+    fetch(`/api/summary?month=${m}`).then(r=>r.json()).then(d=>{setData(d);setLoading(false);});
   };
   const loadInsights = () => {
     setILoading(true);
     fetch("/api/insights").then(r=>r.json()).then(d=>{setInsights(d.insights||[]);setILoading(false);});
+  };
+
+  const changeMonth = (dir: -1|1) => {
+    const [y,m] = selMonth.split("-").map(Number);
+    const nd = new Date(y, m - 1 + dir, 1);
+    const nm = nd.toISOString().slice(0,7);
+    if (nm > currentMonth) return; // can't go into the future
+    setSelMonth(nm);
+    load(nm);
   };
 
   useEffect(()=>{load();loadInsights();},[]);
@@ -193,11 +206,21 @@ export default function Dashboard() {
 
       <main className="max-w-7xl mx-auto px-6 py-6 w-full flex-1">
 
-        {/* ── Page title ─────────────────────────────────────────────── */}
+        {/* ── Page title + Month Navigator ───────────────────────────── */}
         <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">{data.month}</h2>
-            <p className="text-sm text-gray-400 mt-0.5">{data.count} transactions · Updated just now</p>
+          <div className="flex items-center gap-3">
+            <button onClick={()=>changeMonth(-1)}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600 transition-colors text-gray-500">
+              <ChevronRight size={16} className="rotate-180"/>
+            </button>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">{data.month}</h2>
+              <p className="text-sm text-gray-400 mt-0.5">{data.count} transactions · Updated just now</p>
+            </div>
+            <button onClick={()=>changeMonth(1)} disabled={selMonth>=currentMonth}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600 transition-colors text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed">
+              <ChevronRight size={16}/>
+            </button>
           </div>
           <div className={`px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 ${
             data.momChange>0?"bg-red-50 text-red-600":"bg-green-50 text-green-600"

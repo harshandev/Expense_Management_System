@@ -9,14 +9,32 @@ const SMART_BUDGETS: Record<string, number> = {
   Education: 3000, Investment: 10000, Other: 3000,
 };
 
-export async function GET() {
-  const now       = new Date();
-  const yearMonth = now.toISOString().slice(0, 7);
-  const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const monthParam = searchParams.get("month"); // e.g. "2026-03"
+
+  const now = new Date();
+  // Parse selected month or default to current
+  let selYear  = now.getFullYear();
+  let selMonth = now.getMonth(); // 0-indexed
+  if (monthParam && /^\d{4}-\d{2}$/.test(monthParam)) {
+    const [y, m] = monthParam.split("-").map(Number);
+    selYear  = y;
+    selMonth = m - 1; // convert to 0-indexed
+  }
+  const selDate   = new Date(selYear, selMonth, 1);
+  const yearMonth = selDate.toISOString().slice(0, 7);
+  const nextMonth = new Date(selYear, selMonth + 1, 1).toISOString().slice(0, 7);
+  const prevStart = new Date(selYear, selMonth - 1, 1).toISOString().slice(0, 7);
 
   const [{ data: curr }, { data: prev }] = await Promise.all([
-    supabase.from("transactions").select("*").gte("created_at", `${yearMonth}-01`).order("created_at", { ascending: false }),
-    supabase.from("transactions").select("*").gte("created_at", `${prevStart}-01`).lt("created_at", `${yearMonth}-01`),
+    supabase.from("transactions").select("*")
+      .gte("created_at", `${yearMonth}-01`)
+      .lt("created_at",  `${nextMonth}-01`)
+      .order("created_at", { ascending: false }),
+    supabase.from("transactions").select("*")
+      .gte("created_at", `${prevStart}-01`)
+      .lt("created_at",  `${yearMonth}-01`),
   ]);
 
   const transactions = curr || [];
@@ -91,7 +109,9 @@ export async function GET() {
   }).sort((a, b) => b.pct - a.pct);
 
   // Health score (multi-factor)
-  const daysInMonth     = now.getDate();
+  // For past months use full 30 days; for current month use days elapsed so far
+  const isCurrentMonth  = yearMonth === now.toISOString().slice(0, 7);
+  const daysInMonth     = isCurrentMonth ? now.getDate() : new Date(selYear, selMonth + 1, 0).getDate();
   const projectedTotal  = total / daysInMonth * 30;
   const budgetAdherence = Math.max(0, 100 - Math.round((budgetTracker.filter(b => b.over).length / Math.max(budgetTracker.length, 1)) * 50));
   const diversity       = Math.min(100, Object.keys(byCategory).length * 15);
@@ -115,7 +135,8 @@ export async function GET() {
     categoryChart, trend, heatmap,
     monthComparison, budgetTracker, topMerchants,
     recent: transactions.slice(0, 15),
-    month: now.toLocaleString("default", { month: "long", year: "numeric" }),
+    month: selDate.toLocaleString("default", { month: "long", year: "numeric" }),
+    yearMonth,
     scoreBreakdown: { budgetAdherence, diversity, spendControl },
   });
 }
