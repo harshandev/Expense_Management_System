@@ -243,7 +243,7 @@ export default function Dashboard() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
                     <XAxis dataKey="date" tick={{fontSize:10}} tickFormatter={d=>d.slice(5)}/>
                     <YAxis tick={{fontSize:10}} tickFormatter={v=>`₹${(v/1000).toFixed(0)}k`}/>
-                    <Tooltip formatter={(v:number)=>[`₹${v.toLocaleString("en-IN")}`,"Spent"]}/>
+                    <Tooltip formatter={(v)=>[`₹${Number(v).toLocaleString("en-IN")}`,"Spent"]}/>
                     <Area type="monotone" dataKey="amount" stroke="#6366f1" strokeWidth={2.5} fill="url(#areaGrad)"/>
                   </AreaChart>
                 </ResponsiveContainer>
@@ -256,7 +256,7 @@ export default function Dashboard() {
                     <Pie data={data.categoryChart} cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={2}>
                       {data.categoryChart.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
                     </Pie>
-                    <Tooltip formatter={(v:number)=>[`₹${v.toLocaleString("en-IN")}`]}/>
+                    <Tooltip formatter={(v)=>[`₹${Number(v).toLocaleString("en-IN")}`]}/>
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="space-y-2 mt-2">
@@ -392,7 +392,7 @@ export default function Dashboard() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
                     <XAxis dataKey="category" tick={{fontSize:11}}/>
                     <YAxis tick={{fontSize:10}} tickFormatter={v=>`₹${(v/1000).toFixed(0)}k`}/>
-                    <Tooltip formatter={(v:number,n:string)=>[`₹${v.toLocaleString("en-IN")}`,n==="current"?"This Month":"Last Month"]}/>
+                    <Tooltip formatter={(v,n)=>[`₹${Number(v).toLocaleString("en-IN")}`,n==="current"?"This Month":"Last Month"]}/>
                     <Bar dataKey="current"  name="This Month" fill="#6366f1" radius={[4,4,0,0]}/>
                     <Bar dataKey="previous" name="Last Month"  fill="#e0e7ff" radius={[4,4,0,0]}/>
                   </BarChart>
@@ -409,7 +409,7 @@ export default function Dashboard() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
                     <XAxis dataKey="day" tick={{fontSize:11}}/>
                     <YAxis tick={{fontSize:10}} tickFormatter={v=>`₹${(v/1000).toFixed(0)}k`}/>
-                    <Tooltip formatter={(v:number)=>[`₹${v.toLocaleString("en-IN")}`,"Spent"]}/>
+                    <Tooltip formatter={(v)=>[`₹${Number(v).toLocaleString("en-IN")}`,"Spent"]}/>
                     <Bar dataKey="amount" radius={[4,4,0,0]}>
                       {data.heatmap.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
                     </Bar>
@@ -653,7 +653,7 @@ export default function Dashboard() {
               <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()}
                 placeholder="Ask about your finances..."
                 className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100"/>
-              <button onClick={sendChat} disabled={!input.trim()||chatBusy}
+              <button onClick={()=>sendChat()} disabled={!input.trim()||chatBusy}
                 className="w-11 h-11 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-xl flex items-center justify-center transition-colors flex-shrink-0">
                 <Send size={15} className="text-white"/>
               </button>
