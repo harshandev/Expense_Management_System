@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+export const dynamic = "force-dynamic";
+
 const SMART_BUDGETS: Record<string, number> = {
   Food: 6000, Transport: 4000, Shopping: 5000,
   Entertainment: 3000, Health: 3000, Utilities: 4000,
