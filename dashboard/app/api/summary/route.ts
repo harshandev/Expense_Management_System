@@ -109,22 +109,23 @@ export async function GET(req: Request) {
   }).sort((a, b) => b.pct - a.pct);
 
   // Health score (multi-factor)
-  // For past months use full 30 days; for current month use days elapsed so far
-  const isCurrentMonth  = yearMonth === now.toISOString().slice(0, 7);
-  const daysInMonth     = isCurrentMonth ? now.getDate() : new Date(selYear, selMonth + 1, 0).getDate();
-  const projectedTotal  = total / daysInMonth * 30;
-  const budgetAdherence = Math.max(0, 100 - Math.round((budgetTracker.filter(b => b.over).length / Math.max(budgetTracker.length, 1)) * 50));
-  const diversity       = Math.min(100, Object.keys(byCategory).length * 15);
-  const spendControl    = Math.max(0, Math.min(100, 100 - Math.round((projectedTotal - 20000) / 500)));
-  const healthScore     = Math.round((budgetAdherence * 0.4 + diversity * 0.3 + spendControl * 0.3));
-  const clampedScore    = Math.min(95, Math.max(25, healthScore));
+  const totalDaysInMonth = new Date(selYear, selMonth + 1, 0).getDate(); // e.g. 31 for May
+  const isCurrentMonth   = yearMonth === now.toISOString().slice(0, 7);
+  const daysElapsed      = isCurrentMonth ? now.getDate() : totalDaysInMonth;
+  // project daily rate × full days in month (not hardcoded 30)
+  const projectedTotal   = daysElapsed > 0 ? (total / daysElapsed) * totalDaysInMonth : 0;
+  const budgetAdherence  = Math.max(0, 100 - Math.round((budgetTracker.filter(b => b.over).length / Math.max(budgetTracker.length, 1)) * 50));
+  const diversity        = Math.min(100, Object.keys(byCategory).length * 15);
+  const spendControl     = Math.max(0, Math.min(100, 100 - Math.round((projectedTotal - 20000) / 500)));
+  const healthScore      = Math.round((budgetAdherence * 0.4 + diversity * 0.3 + spendControl * 0.3));
+  const clampedScore     = Math.min(95, Math.max(25, healthScore));
 
   // Key metrics
-  const amounts       = transactions.map(t => Number(t.amount));
-  const maxExpense    = amounts.length ? Math.max(...amounts) : 0;
-  const avgExpense    = amounts.length ? Math.round(total / amounts.length) : 0;
-  const dailyAvg      = Math.round(total / daysInMonth);
-  const projectedEnd  = Math.round(projectedTotal);
+  const amounts      = transactions.map(t => Number(t.amount));
+  const maxExpense   = amounts.length ? Math.max(...amounts) : 0;
+  const avgExpense   = amounts.length ? Math.round(total / amounts.length) : 0;
+  const dailyAvg     = Math.round(daysElapsed > 0 ? total / daysElapsed : 0);
+  const projectedEnd = Math.round(projectedTotal);
   const momChange     = prevTotal > 0 ? Math.round(((total - prevTotal) / prevTotal) * 100) : 0;
 
   return NextResponse.json({
