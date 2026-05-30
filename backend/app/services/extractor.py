@@ -1,6 +1,7 @@
 import json
 import httpx
 import base64
+import fitz  # PyMuPDF — handles both text PDFs and scanned PDFs
 from openai import AsyncOpenAI
 from app.config import settings
 
@@ -70,5 +71,78 @@ async def extract_from_text(text: str) -> dict:
         ],
         response_format={"type": "json_object"},
         max_tokens=300,
+    )
+    return json.loads(result.choices[0].message.content)
+
+
+async def extract_from_pdf(pdf_url: str, auth: tuple) -> dict:
+    """
+    Extract expense from a PDF receipt — full multi-page support.
+
+    Strategy:
+      1. Download PDF from Twilio (follow redirects)
+      2. Text extraction across ALL pages → GPT-4o mini if text found (cheap)
+      3. Scanned PDF fallback → render ALL pages as images (capped at 5)
+         and send in one GPT-4o Vision call
+    """
+    # ── Download ────────────────────────────────────────────────────────────
+    async with httpx.AsyncClient(follow_redirects=True) as http_client:
+        response = await http_client.get(pdf_url, auth=auth, timeout=30.0)
+        response.raise_for_status()
+        pdf_bytes = response.content
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(doc)
+
+    # ── Strategy 1: text PDF — extract ALL pages ─────────────────────────────
+    # Works for: Swiggy/Zomato invoice, Amazon order, bank statement, credit card bill
+    text_parts = []
+    for page in doc:
+        text_parts.append(page.get_text())
+    extracted_text = "\n".join(text_parts).strip()
+
+    if len(extracted_text) >= 80:
+        doc.close()
+        # 6000 chars ≈ 1500 tokens — enough for a multi-page statement
+        return await extract_from_text(
+            f"[PDF Receipt – {total_pages} page(s)]\n{extracted_text[:6000]}"
+        )
+
+    # ── Strategy 2: scanned PDF — render ALL pages, cap at 5 ────────────────
+    # Each page rendered at 2× zoom (~150 DPI) for good OCR quality
+    MAX_PAGES = 5
+    pages_to_render = min(total_pages, MAX_PAGES)
+    mat = fitz.Matrix(2.0, 2.0)
+
+    image_contents = []
+    for i in range(pages_to_render):
+        pix = doc[i].get_pixmap(matrix=mat)
+        img_b64 = base64.standard_b64encode(pix.tobytes("png")).decode("utf-8")
+        image_contents.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{img_b64}", "detail": "high"},
+        })
+    doc.close()
+
+    page_note = (
+        f"This is a {total_pages}-page scanned PDF. "
+        f"All {pages_to_render} page(s) are shown below."
+        if total_pages > 1
+        else "This is a 1-page scanned PDF."
+    )
+
+    result = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"{SYSTEM_PROMPT}\n\n{page_note}"},
+                    *image_contents,
+                ],
+            }
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=500,
     )
     return json.loads(result.choices[0].message.content)

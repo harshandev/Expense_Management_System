@@ -1,5 +1,5 @@
 from datetime import datetime
-from app.services.extractor import extract_from_image, extract_from_text
+from app.services.extractor import extract_from_image, extract_from_text, extract_from_pdf
 from app.services.whatsapp import format_expense_reply
 from app.services.database import get_or_create_user, save_transaction, get_monthly_summary
 from app.config import settings
@@ -30,6 +30,7 @@ async def route_message(
             "_Expense Management System Intelligence_\n\n"
             "I'm your AI finance assistant. Send me:\n\n"
             "📸 Receipt or bill photo\n"
+            "📄 PDF invoice or bank statement\n"
             "💬 'Spent 500 on lunch'\n"
             "📱 UPI/bank SMS screenshot\n\n"
             "I'll track everything automatically. Try sending a receipt now!"
@@ -39,11 +40,17 @@ async def route_message(
     if any(kw in body_lower for kw in SUMMARY_KEYWORDS):
         return await handle_summary(from_number)
 
-    # Image (receipt, screenshot, bill)
+    # Image receipt (JPEG, PNG, WebP, GIF)
     if num_media > 0 and "image" in media_content_type:
         auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
         expense = await extract_from_image(media_url, auth)
         return await handle_expense(from_number, expense, raw_input="[image]")
+
+    # PDF receipt (e-invoice, bank statement, scanned bill)
+    if num_media > 0 and "pdf" in media_content_type:
+        auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        expense = await extract_from_pdf(media_url, auth)
+        return await handle_expense(from_number, expense, raw_input="[pdf]")
 
     # Text expense
     if body.strip():
