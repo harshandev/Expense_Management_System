@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import OpenAI from "openai";
 
+export const dynamic = "force-dynamic";
+
 // Fallback insights if OpenAI key missing or request fails
 const FALLBACK_INSIGHTS = [
   { type: "tip",         icon: "💡", title: "Track daily expenses",       message: "Send receipts via WhatsApp to get personalized AI insights based on your real spending patterns." },
