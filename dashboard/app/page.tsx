@@ -100,10 +100,10 @@ export default function Dashboard() {
   const [input,      setInput]      = useState("");
   const [chatBusy,   setChatBusy]   = useState(false);
   const [selMonth,   setSelMonth]   = useState(()=>new Date().toISOString().slice(0,7));
+  const selMonthRef = useRef(selMonth); // always holds latest value, avoids stale closure
   const chatEnd = useRef<HTMLDivElement>(null);
 
   const currentMonth = new Date().toISOString().slice(0,7);
-  // Compute display label directly from selMonth — updates instantly on arrow click
   const monthLabel = new Date(selMonth + "-02").toLocaleString("default",{month:"long",year:"numeric"});
 
   const load = (month: string, initial = false) => {
@@ -118,11 +118,13 @@ export default function Dashboard() {
   };
 
   const changeMonth = (dir: -1|1) => {
-    const [y,m] = selMonth.split("-").map(Number);
+    const cur = selMonthRef.current; // read from ref — always latest, never stale
+    const [y,m] = cur.split("-").map(Number);
     const nd = new Date(y, m - 1 + dir, 1);
     const nm = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}`;
     if (nm > currentMonth) return;
-    setSelMonth(nm);
+    selMonthRef.current = nm;   // update ref immediately so next click sees new value
+    setSelMonth(nm);             // update state so UI re-renders
     load(nm);
   };
 
@@ -239,6 +241,16 @@ export default function Dashboard() {
             {data.momChange>0?"+":""}{data.momChange}% vs last month
           </div>
         </div>
+
+        {/* ── Empty state for months with no data ───────────────────── */}
+        {!dataLoading && data.count === 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-10 text-center mb-6">
+            <p className="text-4xl mb-3">📭</p>
+            <p className="font-semibold text-gray-700 text-lg">No expenses in {monthLabel}</p>
+            <p className="text-sm text-gray-400 mt-1">Use ← → arrows to navigate to months with data</p>
+            <p className="text-xs text-indigo-400 mt-3 font-medium">Data available from March 2026 onwards</p>
+          </div>
+        )}
 
         {/* ── KPI Row ────────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
