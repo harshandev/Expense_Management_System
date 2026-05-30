@@ -88,7 +88,8 @@ function SectionHeader({icon:Icon,title,sub}:{icon:React.ElementType;title:strin
 export default function Dashboard() {
   const [data,       setData]       = useState<Summary|null>(null);
   const [insights,   setInsights]   = useState<Insight[]>([]);
-  const [loading,    setLoading]    = useState(true);
+  const [firstLoad,  setFirstLoad]  = useState(true);   // full-page spinner on initial load only
+  const [dataLoading,setDataLoading]= useState(false);  // subtle spinner on month change
   const [iLoading,   setILoading]   = useState(true);
   const [tab,        setTab]        = useState<Tab>("Overview");
   const [chatOpen,   setChatOpen]   = useState(false);
@@ -98,15 +99,18 @@ export default function Dashboard() {
   }]);
   const [input,      setInput]      = useState("");
   const [chatBusy,   setChatBusy]   = useState(false);
-  const [selMonth,   setSelMonth]   = useState(()=>new Date().toISOString().slice(0,7)); // "YYYY-MM"
+  const [selMonth,   setSelMonth]   = useState(()=>new Date().toISOString().slice(0,7));
   const chatEnd = useRef<HTMLDivElement>(null);
 
   const currentMonth = new Date().toISOString().slice(0,7);
+  // Compute display label directly from selMonth — updates instantly on arrow click
+  const monthLabel = new Date(selMonth + "-02").toLocaleString("default",{month:"long",year:"numeric"});
 
-  const load = (month?: string) => {
-    setLoading(true);
-    const m = month ?? selMonth;
-    fetch(`/api/summary?month=${m}`).then(r=>r.json()).then(d=>{setData(d);setLoading(false);});
+  const load = (month: string, initial = false) => {
+    initial ? setFirstLoad(true) : setDataLoading(true);
+    fetch(`/api/summary?month=${month}`)
+      .then(r=>r.json())
+      .then(d=>{ setData(d); setFirstLoad(false); setDataLoading(false); });
   };
   const loadInsights = () => {
     setILoading(true);
@@ -116,13 +120,13 @@ export default function Dashboard() {
   const changeMonth = (dir: -1|1) => {
     const [y,m] = selMonth.split("-").map(Number);
     const nd = new Date(y, m - 1 + dir, 1);
-    const nm = nd.toISOString().slice(0,7);
-    if (nm > currentMonth) return; // can't go into the future
+    const nm = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}`;
+    if (nm > currentMonth) return;
     setSelMonth(nm);
     load(nm);
   };
 
-  useEffect(()=>{load();loadInsights();},[]);
+  useEffect(()=>{load(selMonth, true); loadInsights();},[]);
   useEffect(()=>{ chatEnd.current?.scrollIntoView({behavior:"smooth"}); },[history]);
 
   const sendChat = async (quickMsg?: string) => {
@@ -138,7 +142,7 @@ export default function Dashboard() {
     setChatBusy(false);
   };
 
-  if (loading) return (
+  if (firstLoad) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="text-center space-y-4">
         <div className="w-16 h-16 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-2xl flex items-center justify-center mx-auto shadow-lg animate-pulse">
@@ -183,7 +187,7 @@ export default function Dashboard() {
             ))}
           </nav>
           <div className="flex items-center gap-2">
-            <button onClick={()=>{load();loadInsights();}}
+            <button onClick={()=>{load(selMonth);loadInsights();}}
               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
               <RefreshCw size={16}/>
             </button>
@@ -209,15 +213,21 @@ export default function Dashboard() {
         {/* ── Page title + Month Navigator ───────────────────────────── */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <button onClick={()=>changeMonth(-1)}
-              className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600 transition-colors text-gray-500">
+            <button onClick={()=>changeMonth(-1)} disabled={dataLoading}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600 transition-colors text-gray-500 disabled:opacity-40">
               <ChevronRight size={16} className="rotate-180"/>
             </button>
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">{data.month}</h2>
-              <p className="text-sm text-gray-400 mt-0.5">{data.count} transactions · Updated just now</p>
+              {/* monthLabel from state — updates instantly before API responds */}
+              <div className="flex items-center gap-2">
+                <h2 className="text-2xl font-bold text-gray-900">{monthLabel}</h2>
+                {dataLoading && <RefreshCw size={14} className="text-indigo-400 animate-spin"/>}
+              </div>
+              <p className="text-sm text-gray-400 mt-0.5">
+                {dataLoading ? "Loading…" : `${data.count} transactions · Updated just now`}
+              </p>
             </div>
-            <button onClick={()=>changeMonth(1)} disabled={selMonth>=currentMonth}
+            <button onClick={()=>changeMonth(1)} disabled={selMonth>=currentMonth||dataLoading}
               className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600 transition-colors text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed">
               <ChevronRight size={16}/>
             </button>
