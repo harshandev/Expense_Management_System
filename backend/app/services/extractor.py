@@ -146,3 +146,42 @@ async def extract_from_pdf(pdf_url: str, auth: tuple) -> dict:
         max_tokens=500,
     )
     return json.loads(result.choices[0].message.content)
+
+
+async def transcribe_from_audio(audio_url: str, auth: tuple) -> str:
+    """
+    Transcribe a WhatsApp voice note using OpenAI Whisper.
+
+    WhatsApp sends audio as audio/ogg (Opus codec). Whisper handles it natively.
+    No language specified → automatic multilingual detection (Hindi, Tamil, English, etc.)
+    """
+    import io
+
+    # Download audio — same follow_redirects pattern as image/PDF
+    async with httpx.AsyncClient(follow_redirects=True) as http_client:
+        response = await http_client.get(audio_url, auth=auth, timeout=30.0)
+        response.raise_for_status()
+        audio_bytes = response.content
+        raw_type = response.headers.get("content-type", "audio/ogg")
+        content_type = raw_type.split(";")[0].strip()
+
+    # Map MIME type → file extension so Whisper can detect the codec
+    ext_map = {
+        "audio/ogg":  "ogg",
+        "audio/mpeg": "mp3",
+        "audio/mp4":  "mp4",
+        "audio/wav":  "wav",
+        "audio/webm": "webm",
+        "audio/amr":  "amr",
+    }
+    ext = ext_map.get(content_type, "ogg")
+
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = f"voice.{ext}"  # Whisper uses filename to detect format
+
+    result = await client.audio.transcriptions.create(
+        model="whisper-1",
+        file=audio_file,
+        # No `language` param → Whisper auto-detects (supports Hindi/Tamil/English/etc.)
+    )
+    return result.text
