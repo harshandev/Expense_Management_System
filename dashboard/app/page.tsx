@@ -493,7 +493,6 @@ export default function Dashboard() {
                       <p className="text-2xl font-bold text-gray-900">₹{b.spent.toLocaleString("en-IN")}</p>
                       <p className="text-xs text-gray-400">of ₹{b.budget.toLocaleString("en-IN")} budget</p>
                     </div>
-                    <p className={`text-lg font-bold ${b.over?"text-red-600":"text-green-600"}`}>{b.pct}%</p>
                   </div>
                   <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
                     <div className="h-full rounded-full transition-all"
@@ -653,7 +652,7 @@ export default function Dashboard() {
             <div className="flex gap-2">
               <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()}
                 placeholder="Ask about your finances..."
-                className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100"/>
+                className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100"/>
               <button onClick={sendChat} disabled={!input.trim()||chatBusy}
                 className="w-11 h-11 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-xl flex items-center justify-center transition-colors flex-shrink-0">
                 <Send size={15} className="text-white"/>
