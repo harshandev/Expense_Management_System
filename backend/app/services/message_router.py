@@ -1,5 +1,5 @@
 from datetime import datetime
-from app.services.extractor import extract_from_image, extract_from_text, extract_from_pdf
+from app.services.extractor import extract_from_image, extract_from_text, extract_from_pdf, transcribe_from_audio
 from app.services.whatsapp import format_expense_reply
 from app.services.database import get_or_create_user, save_transaction, get_monthly_summary
 from app.config import settings
@@ -31,6 +31,7 @@ async def route_message(
             "I'm your AI finance assistant. Send me:\n\n"
             "📸 Receipt or bill photo\n"
             "📄 PDF invoice or bank statement\n"
+            "🎤 Voice note — say your expense out loud\n"
             "💬 'Spent 500 on lunch'\n"
             "📱 UPI/bank SMS screenshot\n\n"
             "I'll track everything automatically. Try sending a receipt now!"
@@ -51,6 +52,13 @@ async def route_message(
         auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
         expense = await extract_from_pdf(media_url, auth)
         return await handle_expense(from_number, expense, raw_input="[pdf]")
+
+    # Voice note (WhatsApp mic button → audio/ogg; also handles mp3/mp4/wav)
+    if num_media > 0 and "audio" in media_content_type:
+        auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        transcribed = await transcribe_from_audio(media_url, auth)
+        expense = await extract_from_text(f"[Voice note transcription]: {transcribed}")
+        return await handle_expense(from_number, expense, raw_input=f"[voice] {transcribed}")
 
     # Text expense
     if body.strip():
