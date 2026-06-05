@@ -135,7 +135,12 @@ export async function GET(req: Request) {
     maxExpense: Math.round(maxExpense), avgExpense,
     categoryChart, trend, heatmap,
     monthComparison, budgetTracker, topMerchants,
-    recent: transactions.slice(0, 15),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recent: transactions.slice(0, 15).map((t: any) => ({
+      id: t.id, merchant: t.merchant, amount: t.amount, category: t.category,
+      description: t.description, created_at: t.created_at,
+      receipt_url: t.receipt_url ?? null,
+    })),
     month: selDate.toLocaleString("default", { month: "long", year: "numeric" }),
     yearMonth,
     scoreBreakdown: { budgetAdherence, diversity, spendControl },
