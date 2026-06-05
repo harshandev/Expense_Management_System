@@ -8,7 +8,7 @@ import {
   Wallet, TrendingUp, TrendingDown, ShoppingBag, Activity, MessageCircle,
   X, Send, Sparkles, AlertTriangle, Lightbulb, Trophy, Zap,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronRight, Target,
-  BarChart2, Receipt, Brain, Clock, Flame,
+  BarChart2, Receipt, Brain, Clock, Flame, CheckCircle, UserCircle, ChevronDown,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -42,6 +42,7 @@ interface Summary {
 }
 interface Insight {type:string;icon:string;title:string;message:string;}
 interface ChatMsg  {role:"user"|"assistant";content:string;}
+interface Toast    {id:number;type:"success"|"error"|"info";message:string;}
 
 // ── Reusable Components ───────────────────────────────────────────────────
 function KpiCard({icon:Icon,label,value,sub,color,trend,trendVal}:{
@@ -86,64 +87,137 @@ function SectionHeader({icon:Icon,title,sub}:{icon:React.ElementType;title:strin
 
 // ── Main Page ─────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [data,       setData]       = useState<Summary|null>(null);
-  const [insights,   setInsights]   = useState<Insight[]>([]);
-  const [firstLoad,  setFirstLoad]  = useState(true);   // full-page spinner on initial load only
-  const [dataLoading,setDataLoading]= useState(false);  // subtle spinner on month change
-  const [iLoading,   setILoading]   = useState(true);
-  const [tab,        setTab]        = useState<Tab>("Overview");
-  const [chatOpen,   setChatOpen]   = useState(false);
-  const [history,    setHistory]    = useState<ChatMsg[]>([{
+  const [data,          setData]          = useState<Summary|null>(null);
+  const [insights,      setInsights]      = useState<Insight[]>([]);
+  const [firstLoad,     setFirstLoad]     = useState(true);
+  const [dataLoading,   setDataLoading]   = useState(false);
+  const [iLoading,      setILoading]      = useState(true);
+  const [tab,           setTab]           = useState<Tab>("Overview");
+  const [chatOpen,      setChatOpen]      = useState(false);
+  const [history,       setHistory]       = useState<ChatMsg[]>([{
     role:"assistant",
     content:"Hi! I'm your EMSI AI assistant 👋 I can see all your spending data. Ask me anything about your finances!"
   }]);
-  const [input,      setInput]      = useState("");
-  const [chatBusy,   setChatBusy]   = useState(false);
-  const [selMonth,   setSelMonth]   = useState(()=>new Date().toISOString().slice(0,7));
-  const selMonthRef = useRef(selMonth); // always holds latest value, avoids stale closure
-  const chatEnd = useRef<HTMLDivElement>(null);
+  const [input,         setInput]         = useState("");
+  const [chatBusy,      setChatBusy]      = useState(false);
+  const [selMonth,      setSelMonth]      = useState(()=>new Date().toISOString().slice(0,7));
+  const [catFilter,     setCatFilter]     = useState("All");
+  const [toasts,        setToasts]        = useState<Toast[]>([]);
+  const [userName,      setUserName]      = useState("");
+  const [nameInput,     setNameInput]     = useState("");
+  const [showNameModal, setShowNameModal] = useState(false);
+
+  const selMonthRef = useRef(selMonth);
+  const chatEnd     = useRef<HTMLDivElement>(null);
 
   const currentMonth = new Date().toISOString().slice(0,7);
-  const monthLabel = new Date(selMonth + "-02").toLocaleString("default",{month:"long",year:"numeric"});
+  const monthLabel   = new Date(selMonth + "-02").toLocaleString("default",{month:"long",year:"numeric"});
 
+  // Generate month options from March 2026 → current
+  const monthOptions = (() => {
+    const opts: {val:string;label:string}[] = [];
+    let cur = new Date(2026, 2, 1); // March 2026
+    const end = new Date(currentMonth + "-02");
+    while (cur <= end) {
+      const val = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,"0")}`;
+      opts.push({ val, label: cur.toLocaleString("default",{month:"long",year:"numeric"}) });
+      cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+    }
+    return opts.reverse(); // newest first
+  })();
+
+  // ── Toast helper ───────────────────────────────────────────────────────
+  const showToast = (message: string, type: Toast["type"] = "info") => {
+    const id = Date.now();
+    setToasts(p => [...p, {id, type, message}]);
+    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+  };
+
+  // ── Name helpers ───────────────────────────────────────────────────────
+  const saveName = () => {
+    const n = nameInput.trim();
+    if (!n) return;
+    setUserName(n);
+    localStorage.setItem("emsi_username", n);
+    setShowNameModal(false);
+    setNameInput("");
+    showToast(`Welcome, ${n}! 👋`, "success");
+  };
+
+  // ── Data loaders ───────────────────────────────────────────────────────
   const load = (month: string, initial = false) => {
     initial ? setFirstLoad(true) : setDataLoading(true);
     fetch(`/api/summary?month=${month}`)
-      .then(r=>r.json())
-      .then(d=>{ setData(d); setFirstLoad(false); setDataLoading(false); });
-  };
-  const loadInsights = () => {
-    setILoading(true);
-    fetch("/api/insights").then(r=>r.json()).then(d=>{setInsights(d.insights||[]);setILoading(false);});
+      .then(r => r.json())
+      .then(d => { setData(d); setFirstLoad(false); setDataLoading(false); })
+      .catch(() => { setFirstLoad(false); setDataLoading(false); showToast("Failed to load data. Check your connection.", "error"); });
   };
 
+  const loadInsights = () => {
+    setILoading(true);
+    fetch("/api/insights")
+      .then(r => r.json())
+      .then(d => { setInsights(d.insights||[]); setILoading(false); })
+      .catch(() => { setILoading(false); showToast("Couldn't load AI insights.", "error"); });
+  };
+
+  // ── Month navigation ───────────────────────────────────────────────────
   const changeMonth = (dir: -1|1) => {
-    const cur = selMonthRef.current; // read from ref — always latest, never stale
+    const cur = selMonthRef.current;
     const [y,m] = cur.split("-").map(Number);
     const nd = new Date(y, m - 1 + dir, 1);
     const nm = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}`;
     if (nm > currentMonth) return;
-    selMonthRef.current = nm;   // update ref immediately so next click sees new value
-    setSelMonth(nm);             // update state so UI re-renders
+    selMonthRef.current = nm;
+    setSelMonth(nm);
+    setCatFilter("All");
     load(nm);
   };
 
-  useEffect(()=>{load(selMonth, true); loadInsights();},[]);
-  useEffect(()=>{ chatEnd.current?.scrollIntoView({behavior:"smooth"}); },[history]);
+  const handleMonthSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const nm = e.target.value;
+    selMonthRef.current = nm;
+    setSelMonth(nm);
+    setCatFilter("All");
+    load(nm);
+  };
 
+  // ── Effects ────────────────────────────────────────────────────────────
+  useEffect(() => { load(selMonth, true); loadInsights(); }, []);
+  useEffect(() => { chatEnd.current?.scrollIntoView({behavior:"smooth"}); }, [history]);
+  useEffect(() => {
+    const saved = localStorage.getItem("emsi_username");
+    if (saved) setUserName(saved);
+  }, []);
+
+  // ── Chat ───────────────────────────────────────────────────────────────
   const sendChat = async (quickMsg?: string) => {
     const msg = (quickMsg ?? input).trim();
     if (!msg||chatBusy) return;
     setInput(""); setChatBusy(true);
     const next:ChatMsg[] = [...history,{role:"user",content:msg}];
     setHistory(next);
-    const res  = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,history:next})});
-    const reader = res.body!.getReader(); const dec = new TextDecoder(); let out="";
-    setHistory(p=>[...p,{role:"assistant",content:""}]);
-    while(true){const{done,value}=await reader.read();if(done)break;out+=dec.decode(value);setHistory(p=>{const u=[...p];u[u.length-1]={role:"assistant",content:out};return u;});}
+    try {
+      const res = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,history:next})});
+      const reader = res.body!.getReader(); const dec = new TextDecoder(); let out="";
+      setHistory(p=>[...p,{role:"assistant",content:""}]);
+      while(true){const{done,value}=await reader.read();if(done)break;out+=dec.decode(value);setHistory(p=>{const u=[...p];u[u.length-1]={role:"assistant",content:out};return u;});}
+    } catch {
+      showToast("Chat failed. Please try again.", "error");
+      setHistory(p => p.slice(0,-1));
+    }
     setChatBusy(false);
   };
 
+  // ── Category filter data ───────────────────────────────────────────────
+  const recentCategories = data
+    ? ["All", ...Array.from(new Set(data.recent.map(t => t.category)))]
+    : ["All"];
+  const filteredRecent = data
+    ? (catFilter === "All" ? data.recent : data.recent.filter(t => t.category === catFilter))
+    : [];
+
+  // ── Loading state ──────────────────────────────────────────────────────
   if (firstLoad) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="text-center space-y-4">
@@ -177,7 +251,9 @@ export default function Dashboard() {
             </div>
             <div>
               <h1 className="font-bold text-gray-900 text-base leading-none">EMSI</h1>
-              <p className="text-xs text-gray-400 hidden sm:block">Expense Management System Intelligence</p>
+              <p className="text-xs text-gray-400 hidden sm:block">
+                {userName ? `Hi, ${userName} 👋` : "Expense Management System Intelligence"}
+              </p>
             </div>
           </div>
           <nav className="hidden md:flex bg-gray-100 rounded-xl p-1 gap-0.5">
@@ -189,6 +265,13 @@ export default function Dashboard() {
             ))}
           </nav>
           <div className="flex items-center gap-2">
+            {/* User / Name button */}
+            <button onClick={()=>{ setNameInput(userName); setShowNameModal(true); }}
+              title={userName ? `Logged in as ${userName}` : "Set your name"}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors text-sm">
+              <UserCircle size={18}/>
+              <span className="hidden sm:inline font-medium">{userName || "Set name"}</span>
+            </button>
             <button onClick={()=>{load(selMonth);loadInsights();}}
               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
               <RefreshCw size={16}/>
@@ -214,25 +297,38 @@ export default function Dashboard() {
 
         {/* ── Page title + Month Navigator ───────────────────────────── */}
         <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {/* Prev arrow */}
             <button onClick={()=>changeMonth(-1)} disabled={dataLoading}
               className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600 transition-colors text-gray-500 disabled:opacity-40">
               <ChevronRight size={16} className="rotate-180"/>
             </button>
-            <div>
-              {/* monthLabel from state — updates instantly before API responds */}
-              <div className="flex items-center gap-2">
-                <h2 className="text-2xl font-bold text-gray-900">{monthLabel}</h2>
-                {dataLoading && <RefreshCw size={14} className="text-indigo-400 animate-spin"/>}
-              </div>
-              <p className="text-sm text-gray-400 mt-0.5">
-                {dataLoading ? "Loading…" : `${data.count} transactions · Updated just now`}
-              </p>
+
+            {/* Month dropdown select */}
+            <div className="relative flex items-center gap-1.5">
+              <select
+                value={selMonth}
+                onChange={handleMonthSelect}
+                disabled={dataLoading}
+                className="appearance-none bg-white border border-gray-200 rounded-xl px-4 py-2 pr-9 font-bold text-gray-900 text-lg cursor-pointer hover:border-indigo-300 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all disabled:opacity-50 shadow-sm"
+              >
+                {monthOptions.map(o=>(
+                  <option key={o.val} value={o.val}>{o.label}</option>
+                ))}
+              </select>
+              <ChevronDown size={14} className="absolute right-3 text-gray-400 pointer-events-none"/>
+              {dataLoading && <RefreshCw size={13} className="text-indigo-400 animate-spin ml-1"/>}
             </div>
+
+            {/* Next arrow */}
             <button onClick={()=>changeMonth(1)} disabled={selMonth>=currentMonth||dataLoading}
               className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600 transition-colors text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed">
               <ChevronRight size={16}/>
             </button>
+
+            <p className="text-sm text-gray-400 ml-1 hidden sm:block">
+              {dataLoading ? "Loading…" : `${data.count} transactions`}
+            </p>
           </div>
           <div className={`px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 ${
             data.momChange>0?"bg-red-50 text-red-600":"bg-green-50 text-green-600"
@@ -247,7 +343,7 @@ export default function Dashboard() {
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-10 text-center mb-6">
             <p className="text-4xl mb-3">📭</p>
             <p className="font-semibold text-gray-700 text-lg">No expenses in {monthLabel}</p>
-            <p className="text-sm text-gray-400 mt-1">Use ← → arrows to navigate to months with data</p>
+            <p className="text-sm text-gray-400 mt-1">Use the dropdown or arrows to navigate to months with data</p>
             <p className="text-xs text-indigo-400 mt-3 font-medium">Data available from March 2026 onwards</p>
           </div>
         )}
@@ -397,15 +493,32 @@ export default function Dashboard() {
 
               {/* Recent Transactions */}
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Clock size={15} className="text-indigo-500"/>
-                    <h3 className="font-semibold text-gray-900">Recent Transactions</h3>
+                <div className="px-6 py-4 border-b border-gray-50">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Clock size={15} className="text-indigo-500"/>
+                      <h3 className="font-semibold text-gray-900">Recent Transactions</h3>
+                    </div>
+                    <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">{data.count} total</span>
                   </div>
-                  <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">{data.count} total</span>
+                  {/* Category filter chips */}
+                  <div className="flex gap-1.5 flex-wrap">
+                    {recentCategories.map(cat => (
+                      <button key={cat} onClick={()=>setCatFilter(cat)}
+                        className={`text-xs px-2.5 py-1 rounded-full font-medium transition-all ${
+                          catFilter===cat
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-gray-100 text-gray-500 hover:bg-indigo-50 hover:text-indigo-600"
+                        }`}>
+                        {cat==="All" ? "All" : `${CAT_EMOJI[cat]||"📦"} ${cat}`}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="divide-y divide-gray-50 max-h-[280px] overflow-y-auto">
-                  {data.recent.map(t=>(
+                  {filteredRecent.length === 0 ? (
+                    <div className="py-8 text-center text-gray-400 text-sm">No {catFilter} transactions this month</div>
+                  ) : filteredRecent.map(t=>(
                     <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-base">{CAT_EMOJI[t.category]||"📦"}</div>
@@ -706,6 +819,58 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* ── Name Modal ────────────────────────────────────────────────── */}
+      {showNameModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={()=>setShowNameModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-80 mx-4" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                <UserCircle size={20} className="text-indigo-600"/>
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Your Name</h3>
+                <p className="text-xs text-gray-400">Personalise your dashboard</p>
+              </div>
+            </div>
+            <input
+              autoFocus
+              value={nameInput}
+              onChange={e=>setNameInput(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&saveName()}
+              placeholder="e.g. Kishore"
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 mb-4"
+            />
+            <div className="flex gap-2">
+              <button onClick={()=>setShowNameModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 hover:bg-gray-50 transition-colors">
+                Cancel
+              </button>
+              <button onClick={saveName} disabled={!nameInput.trim()}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-sm text-white font-semibold transition-colors">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Toast Notifications ───────────────────────────────────────── */}
+      <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map(t=>(
+          <div key={t.id} className={`flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium pointer-events-auto animate-in slide-in-from-left-4 duration-300 ${
+            t.type==="success" ? "bg-green-50 border-green-200 text-green-800" :
+            t.type==="error"   ? "bg-red-50   border-red-200   text-red-800"   :
+                                  "bg-blue-50  border-blue-200  text-blue-800"
+          }`}>
+            {t.type==="success" ? <CheckCircle size={16} className="text-green-600 flex-shrink-0"/> :
+             t.type==="error"   ? <AlertTriangle size={16} className="text-red-600 flex-shrink-0"/> :
+                                  <Lightbulb size={16} className="text-blue-600 flex-shrink-0"/>}
+            {t.message}
+          </div>
+        ))}
+      </div>
+
     </div>
   );
 }

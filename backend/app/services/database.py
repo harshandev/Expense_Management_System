@@ -15,6 +15,38 @@ def _get_or_create_user_sync(phone: str) -> dict:
     return result.data[0]
 
 
+def _get_user_name_sync(phone: str) -> str | None:
+    """Return the stored display name for a phone number, or None if not set."""
+    result = _client.table("users").select("name").eq("phone", phone).execute()
+    if result.data and result.data[0].get("name"):
+        return result.data[0]["name"]
+    return None
+
+
+def _set_user_name_sync(phone: str, name: str) -> None:
+    """Persist a display name for a user."""
+    _client.table("users").update({"name": name}).eq("phone", phone).execute()
+
+
+def _is_duplicate_sync(user_id: str, merchant: str, amount: float) -> bool:
+    """
+    Return True if the same merchant + amount was already saved for this user
+    within the last 5 minutes — guards against double-sends from WhatsApp retries.
+    """
+    from datetime import timedelta
+    cutoff = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+    result = (
+        _client.table("transactions")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("merchant", merchant)
+        .eq("amount", amount)
+        .gte("created_at", cutoff)
+        .execute()
+    )
+    return bool(result.data)
+
+
 def _save_transaction_sync(user_id: str, expense: dict, raw_input: str) -> dict:
     data = {
         "user_id": user_id,
@@ -79,3 +111,15 @@ async def save_transaction(user_id: str, expense: dict, raw_input: str) -> dict:
 
 async def get_monthly_summary(user_id: str) -> dict:
     return await asyncio.to_thread(_get_monthly_summary_sync, user_id)
+
+
+async def is_duplicate(user_id: str, merchant: str, amount: float) -> bool:
+    return await asyncio.to_thread(_is_duplicate_sync, user_id, merchant, amount)
+
+
+async def get_user_name(phone: str) -> str | None:
+    return await asyncio.to_thread(_get_user_name_sync, phone)
+
+
+async def set_user_name(phone: str, name: str) -> None:
+    await asyncio.to_thread(_set_user_name_sync, phone, name)
