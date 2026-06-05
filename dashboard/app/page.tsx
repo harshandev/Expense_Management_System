@@ -9,6 +9,7 @@ import {
   X, Send, Sparkles, AlertTriangle, Lightbulb, Trophy, Zap,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronRight, Target,
   BarChart2, Receipt, Brain, Clock, Flame, CheckCircle, UserCircle, ChevronDown,
+  Upload, FileImage, FilePlus, ImageIcon,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -37,7 +38,7 @@ interface Summary {
   monthComparison:{category:string;current:number;previous:number}[];
   budgetTracker:{category:string;spent:number;budget:number;pct:number;over:boolean}[];
   topMerchants:{name:string;total:number;count:number;avg:number}[];
-  recent:{id:string;merchant:string;amount:number;category:string;description:string;created_at:string}[];
+  recent:{id:string;merchant:string;amount:number;category:string;description:string;created_at:string;receipt_url:string|null}[];
   scoreBreakdown:{budgetAdherence:number;diversity:number;spendControl:number};
 }
 interface Insight {type:string;icon:string;title:string;message:string;}
@@ -105,7 +106,18 @@ export default function Dashboard() {
   const [toasts,        setToasts]        = useState<Toast[]>([]);
   const [userName,      setUserName]      = useState("");
   const [nameInput,     setNameInput]     = useState("");
-  const [showNameModal, setShowNameModal] = useState(false);
+  const [showNameModal,  setShowNameModal]  = useState(false);
+
+  // Upload modal state
+  type UploadStage = "idle"|"preview"|"analyzing"|"success"|"error";
+  const [uploadOpen,    setUploadOpen]    = useState(false);
+  const [uploadStage,   setUploadStage]   = useState<UploadStage>("idle");
+  const [uploadFile,    setUploadFile]    = useState<File|null>(null);
+  const [uploadPreview, setUploadPreview] = useState<string|null>(null);
+  const [uploadResult,  setUploadResult]  = useState<Record<string,unknown>|null>(null);
+  const [uploadError,   setUploadError]   = useState<string>("");
+  const [uploadDrag,    setUploadDrag]    = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const selMonthRef = useRef(selMonth);
   const chatEnd     = useRef<HTMLDivElement>(null);
@@ -142,6 +154,46 @@ export default function Dashboard() {
     setShowNameModal(false);
     setNameInput("");
     showToast(`Welcome, ${n}! 👋`, "success");
+  };
+
+  // ── Upload helpers ─────────────────────────────────────────────────────
+  const openUpload = () => { setUploadStage("idle"); setUploadFile(null); setUploadPreview(null); setUploadResult(null); setUploadError(""); setUploadOpen(true); };
+  const closeUpload = () => { setUploadOpen(false); };
+
+  const handleUploadFile = (file: File) => {
+    if (!file) return;
+    setUploadFile(file);
+    setUploadError("");
+    setUploadResult(null);
+    if (file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = e => setUploadPreview(e.target?.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setUploadPreview(null);
+    }
+    setUploadStage("preview");
+  };
+
+  const analyzeUpload = async () => {
+    if (!uploadFile) return;
+    setUploadStage("analyzing");
+    setUploadError("");
+    try {
+      const form = new FormData();
+      form.append("file", uploadFile);
+      const res  = await fetch("/api/upload", { method: "POST", body: form });
+      const json = await res.json();
+      if (!res.ok) { setUploadError(json.error || "Processing failed."); setUploadStage("error"); return; }
+      setUploadResult(json.expense);
+      setUploadStage("success");
+      // Refresh dashboard data so the new transaction appears immediately
+      load(selMonth);
+      showToast("Receipt added to dashboard! ✅", "success");
+    } catch {
+      setUploadError("Network error. Please try again.");
+      setUploadStage("error");
+    }
   };
 
   // ── Data loaders ───────────────────────────────────────────────────────
@@ -275,6 +327,10 @@ export default function Dashboard() {
             <button onClick={()=>{load(selMonth);loadInsights();}}
               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
               <RefreshCw size={16}/>
+            </button>
+            <button onClick={openUpload}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
+              <Upload size={15}/><span className="hidden sm:inline">Upload</span>
             </button>
             <a href="https://wa.me/14155238886" target="_blank" rel="noreferrer"
               className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
@@ -519,9 +575,18 @@ export default function Dashboard() {
                   {filteredRecent.length === 0 ? (
                     <div className="py-8 text-center text-gray-400 text-sm">No {catFilter} transactions this month</div>
                   ) : filteredRecent.map(t=>(
-                    <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                    <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors group">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-base">{CAT_EMOJI[t.category]||"📦"}</div>
+                        {/* Receipt thumbnail if available, otherwise category emoji */}
+                        {t.receipt_url ? (
+                          <a href={t.receipt_url} target="_blank" rel="noreferrer"
+                            className="w-9 h-9 rounded-xl overflow-hidden border border-gray-100 flex-shrink-0 cursor-zoom-in hover:ring-2 hover:ring-indigo-300 transition-all">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={t.receipt_url} alt="receipt" className="w-full h-full object-cover"/>
+                          </a>
+                        ) : (
+                          <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-base flex-shrink-0">{CAT_EMOJI[t.category]||"📦"}</div>
+                        )}
                         <div>
                           <p className="font-medium text-gray-900 text-sm">{t.merchant||"Unknown"}</p>
                           <p className="text-xs text-gray-400">{t.category} · {new Date(t.created_at).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
@@ -815,6 +880,177 @@ export default function Dashboard() {
                 className="w-11 h-11 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-xl flex items-center justify-center transition-colors flex-shrink-0">
                 <Send size={15} className="text-white"/>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Upload Modal ──────────────────────────────────────────────── */}
+      {uploadOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={closeUpload}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e=>e.stopPropagation()}>
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center">
+                  <Upload size={17} className="text-indigo-600"/>
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900">Upload Receipt</h3>
+                  <p className="text-xs text-gray-400">Image or PDF · AI extracts automatically</p>
+                </div>
+              </div>
+              <button onClick={closeUpload} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition-colors">
+                <X size={18}/>
+              </button>
+            </div>
+
+            <div className="p-6">
+
+              {/* ── IDLE: Drag & drop zone ── */}
+              {(uploadStage==="idle") && (
+                <div
+                  onDragOver={e=>{e.preventDefault();setUploadDrag(true);}}
+                  onDragLeave={()=>setUploadDrag(false)}
+                  onDrop={e=>{e.preventDefault();setUploadDrag(false);const f=e.dataTransfer.files[0];if(f)handleUploadFile(f);}}
+                  onClick={()=>uploadInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
+                    uploadDrag ? "border-indigo-400 bg-indigo-50" : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30"
+                  }`}
+                >
+                  <div className="flex justify-center gap-3 mb-4">
+                    <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center">
+                      <FileImage size={22} className="text-indigo-500"/>
+                    </div>
+                    <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center">
+                      <FilePlus size={22} className="text-orange-500"/>
+                    </div>
+                  </div>
+                  <p className="font-semibold text-gray-800 mb-1">Drop your receipt here</p>
+                  <p className="text-sm text-gray-400 mb-3">or click to browse files</p>
+                  <div className="flex justify-center gap-2">
+                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full">JPEG / PNG / WebP</span>
+                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full">PDF</span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── PREVIEW: File selected ── */}
+              {uploadStage==="preview" && uploadFile && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl border border-gray-100">
+                    {uploadPreview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={uploadPreview} alt="preview" className="w-14 h-14 rounded-lg object-cover border border-gray-200 flex-shrink-0"/>
+                    ) : (
+                      <div className="w-14 h-14 bg-orange-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <FilePlus size={24} className="text-orange-500"/>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900 text-sm truncate">{uploadFile.name}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {(uploadFile.size / 1024).toFixed(0)} KB · {uploadFile.type.includes("pdf") ? "PDF" : "Image"}
+                      </p>
+                    </div>
+                    <button onClick={()=>{setUploadStage("idle");setUploadFile(null);setUploadPreview(null);}}
+                      className="text-gray-400 hover:text-red-500 transition-colors p-1">
+                      <X size={14}/>
+                    </button>
+                  </div>
+                  <button onClick={analyzeUpload}
+                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2">
+                    <Sparkles size={16}/> Analyze with AI
+                  </button>
+                  <button onClick={()=>uploadInputRef.current?.click()}
+                    className="w-full py-2 text-sm text-gray-400 hover:text-indigo-600 transition-colors">
+                    Choose a different file
+                  </button>
+                </div>
+              )}
+
+              {/* ── ANALYZING: Loading state ── */}
+              {uploadStage==="analyzing" && (
+                <div className="py-10 text-center space-y-4">
+                  <div className="w-16 h-16 bg-gradient-to-br from-indigo-100 to-violet-100 rounded-2xl flex items-center justify-center mx-auto">
+                    <Brain size={28} className="text-indigo-600 animate-pulse"/>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-800">AI is reading your receipt…</p>
+                    <p className="text-sm text-gray-400 mt-1">Extracting merchant, amount, category</p>
+                  </div>
+                  <div className="flex justify-center gap-1.5">
+                    {[0,1,2].map(i=>(
+                      <div key={i} className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay:`${i*150}ms`}}/>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── SUCCESS: Expense extracted & saved ── */}
+              {uploadStage==="success" && uploadResult && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 text-green-600 mb-2">
+                    <CheckCircle size={18}/>
+                    <span className="font-semibold text-sm">Expense saved to dashboard!</span>
+                  </div>
+                  <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl p-5 border border-indigo-100 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{CAT_EMOJI[String(uploadResult.category)]||"📦"}</span>
+                        <div>
+                          <p className="font-bold text-gray-900">{String(uploadResult.merchant||"Unknown")}</p>
+                          <p className="text-xs text-gray-500">{String(uploadResult.category)} · {String(uploadResult.subcategory||"")}</p>
+                        </div>
+                      </div>
+                      <p className="text-2xl font-bold text-indigo-700">₹{Number(uploadResult.amount).toLocaleString("en-IN")}</p>
+                    </div>
+                    {!!uploadResult.description && (
+                      <p className="text-xs text-gray-500 border-t border-indigo-100 pt-3">{String(uploadResult.description)}</p>
+                    )}
+                    <div className="flex items-center gap-1 text-xs text-gray-400">
+                      <span>Date:</span>
+                      <span className="font-medium text-gray-600">{String(uploadResult.date||"")}</span>
+                      <span className="ml-auto">Confidence: {Math.round(Number(uploadResult.confidence||0)*100)}%</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={()=>{setUploadStage("idle");setUploadFile(null);setUploadPreview(null);setUploadResult(null);}}
+                      className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                      Upload Another
+                    </button>
+                    <button onClick={closeUpload}
+                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 rounded-xl text-sm text-white font-semibold transition-colors">
+                      Done
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── ERROR ── */}
+              {uploadStage==="error" && (
+                <div className="space-y-4">
+                  <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3">
+                    <AlertTriangle size={18} className="text-red-500 flex-shrink-0 mt-0.5"/>
+                    <p className="text-sm text-red-700">{uploadError}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={()=>setUploadStage(uploadFile?"preview":"idle")}
+                      className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                      Try Again
+                    </button>
+                    <button onClick={closeUpload}
+                      className="flex-1 py-2.5 bg-gray-100 rounded-xl text-sm text-gray-600 hover:bg-gray-200 transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Hidden file input */}
+              <input ref={uploadInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+                className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)handleUploadFile(f);e.target.value="";}}/>
             </div>
           </div>
         </div>
