@@ -9,7 +9,7 @@ import {
   X, Send, Sparkles, AlertTriangle, Lightbulb, Trophy, Zap,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronRight, Target,
   BarChart2, Receipt, Brain, Clock, Flame, CheckCircle, UserCircle, ChevronDown,
-  Upload, FileImage, FilePlus, ImageIcon,
+  Upload, FileImage, FilePlus,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -24,8 +24,10 @@ const INSIGHT_CFG: Record<string,{bg:string;border:string;badge:string;Icon:Reac
   achievement:{bg:"bg-green-50", border:"border-green-200", badge:"bg-green-100 text-green-700",Icon:Trophy},
   prediction: {bg:"bg-purple-50",border:"border-purple-200",badge:"bg-purple-100 text-purple-700",Icon:Zap},
 };
-const TABS = ["Overview","Analytics","Budget","Intelligence"] as const;
+const TABS = ["Overview","Analytics","Budget","Intelligence","Upload"] as const;
 type Tab = typeof TABS[number];
+
+const CATEGORIES = ["Food","Transport","Shopping","Entertainment","Health","Utilities","Education","Investment","Other"] as const;
 
 // ── Types ─────────────────────────────────────────────────────────────────
 interface Summary {
@@ -108,15 +110,20 @@ export default function Dashboard() {
   const [nameInput,     setNameInput]     = useState("");
   const [showNameModal,  setShowNameModal]  = useState(false);
 
-  // Upload modal state
-  type UploadStage = "idle"|"preview"|"analyzing"|"success"|"error";
-  const [uploadOpen,    setUploadOpen]    = useState(false);
-  const [uploadStage,   setUploadStage]   = useState<UploadStage>("idle");
-  const [uploadFile,    setUploadFile]    = useState<File|null>(null);
-  const [uploadPreview, setUploadPreview] = useState<string|null>(null);
-  const [uploadResult,  setUploadResult]  = useState<Record<string,unknown>|null>(null);
-  const [uploadError,   setUploadError]   = useState<string>("");
-  const [uploadDrag,    setUploadDrag]    = useState(false);
+  // Upload tab state
+  type UploadStage = "idle"|"analyzing"|"review"|"saving"|"success"|"error";
+  interface EditableExpense {
+    merchant: string; amount: string; category: string;
+    subcategory: string; date: string; description: string; confidence: number;
+  }
+  const [uploadStage,      setUploadStage]      = useState<UploadStage>("idle");
+  const [uploadFile,       setUploadFile]        = useState<File|null>(null);
+  const [uploadPreview,    setUploadPreview]     = useState<string|null>(null);
+  const [uploadReceiptUrl, setUploadReceiptUrl]  = useState<string|null>(null);
+  const [uploadFileName,   setUploadFileName]    = useState<string>("");
+  const [editedExpense,    setEditedExpense]     = useState<EditableExpense|null>(null);
+  const [uploadError,      setUploadError]       = useState<string>("");
+  const [uploadDrag,       setUploadDrag]        = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const selMonthRef = useRef(selMonth);
@@ -157,39 +164,70 @@ export default function Dashboard() {
   };
 
   // ── Upload helpers ─────────────────────────────────────────────────────
-  const openUpload = () => { setUploadStage("idle"); setUploadFile(null); setUploadPreview(null); setUploadResult(null); setUploadError(""); setUploadOpen(true); };
-  const closeUpload = () => { setUploadOpen(false); };
+  const resetUpload = () => {
+    setUploadStage("idle"); setUploadFile(null); setUploadPreview(null);
+    setUploadReceiptUrl(null); setEditedExpense(null); setUploadError(""); setUploadFileName("");
+  };
 
   const handleUploadFile = (file: File) => {
     if (!file) return;
+    resetUpload();
     setUploadFile(file);
-    setUploadError("");
-    setUploadResult(null);
+    setUploadFileName(file.name);
     if (file.type.startsWith("image/")) {
       const reader = new FileReader();
       reader.onload = e => setUploadPreview(e.target?.result as string);
       reader.readAsDataURL(file);
-    } else {
-      setUploadPreview(null);
     }
-    setUploadStage("preview");
+    setUploadStage("analyzing");
+    // Kick off analysis immediately on file selection
+    analyzeFile(file);
   };
 
-  const analyzeUpload = async () => {
-    if (!uploadFile) return;
-    setUploadStage("analyzing");
-    setUploadError("");
+  const analyzeFile = async (file: File) => {
     try {
       const form = new FormData();
-      form.append("file", uploadFile);
+      form.append("file", file);
       const res  = await fetch("/api/upload", { method: "POST", body: form });
       const json = await res.json();
       if (!res.ok) { setUploadError(json.error || "Processing failed."); setUploadStage("error"); return; }
-      setUploadResult(json.expense);
+      const e = json.expense as Record<string, unknown>;
+      setUploadReceiptUrl(json.receiptUrl ?? null);
+      setEditedExpense({
+        merchant:    String(e.merchant    || ""),
+        amount:      String(e.amount      || ""),
+        category:    String(e.category    || "Other"),
+        subcategory: String(e.subcategory || ""),
+        date:        String(e.date        || new Date().toISOString().slice(0,10)),
+        description: String(e.description || ""),
+        confidence:  Number(e.confidence  || 0),
+      });
+      setUploadStage("review");
+    } catch {
+      setUploadError("Network error. Please try again.");
+      setUploadStage("error");
+    }
+  };
+
+  const saveExpense = async () => {
+    if (!editedExpense) return;
+    setUploadStage("saving");
+    try {
+      const res  = await fetch("/api/upload/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...editedExpense,
+          amount:     Number(editedExpense.amount),
+          receiptUrl: uploadReceiptUrl,
+          fileName:   uploadFileName,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setUploadError(json.error || "Save failed."); setUploadStage("error"); return; }
       setUploadStage("success");
-      // Refresh dashboard data so the new transaction appears immediately
       load(selMonth);
-      showToast("Receipt added to dashboard! ✅", "success");
+      showToast(`${editedExpense.merchant} ₹${editedExpense.amount} saved! ✅`, "success");
     } catch {
       setUploadError("Network error. Please try again.");
       setUploadStage("error");
@@ -328,7 +366,7 @@ export default function Dashboard() {
               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
               <RefreshCw size={16}/>
             </button>
-            <button onClick={openUpload}
+            <button onClick={()=>{ resetUpload(); setTab("Upload"); }}
               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
               <Upload size={15}/><span className="hidden sm:inline">Upload</span>
             </button>
@@ -805,6 +843,290 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* ══════════════════ UPLOAD TAB ════════════════════════════════ */}
+        {tab==="Upload" && (
+          <div className="max-w-3xl mx-auto space-y-5">
+
+            {/* ── IDLE: Drop zone ─────────────────────────────────────── */}
+            {uploadStage==="idle" && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="px-8 pt-8 pb-4">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                      <Upload size={19} className="text-indigo-600"/>
+                    </div>
+                    <div>
+                      <h2 className="font-bold text-gray-900 text-lg">Upload Receipt</h2>
+                      <p className="text-sm text-gray-400">AI extracts all details — you review & confirm before saving</p>
+                    </div>
+                  </div>
+                  <div
+                    onDragOver={e=>{e.preventDefault();setUploadDrag(true);}}
+                    onDragLeave={()=>setUploadDrag(false)}
+                    onDrop={e=>{e.preventDefault();setUploadDrag(false);const f=e.dataTransfer.files[0];if(f)handleUploadFile(f);}}
+                    onClick={()=>uploadInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-2xl p-14 text-center cursor-pointer transition-all ${
+                      uploadDrag?"border-indigo-400 bg-indigo-50 scale-[1.01]":"border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40"
+                    }`}
+                  >
+                    <div className="flex justify-center gap-4 mb-5">
+                      <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center shadow-sm">
+                        <FileImage size={26} className="text-indigo-500"/>
+                      </div>
+                      <div className="w-14 h-14 bg-orange-50 rounded-2xl flex items-center justify-center shadow-sm">
+                        <FilePlus size={26} className="text-orange-500"/>
+                      </div>
+                    </div>
+                    <p className="font-semibold text-gray-800 text-lg mb-1">Drop your receipt here</p>
+                    <p className="text-gray-400 text-sm mb-4">or click to browse files</p>
+                    <div className="flex justify-center gap-2">
+                      <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full font-medium">JPEG / PNG / WebP</span>
+                      <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full font-medium">PDF Invoice</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-8 py-5 bg-slate-50 border-t border-gray-100 flex items-center gap-3">
+                  <div className="w-7 h-7 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Brain size={13} className="text-indigo-600"/>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    AI will scan merchant name, amount, date, and category. You can edit anything before it touches the database.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* ── ANALYZING ───────────────────────────────────────────── */}
+            {uploadStage==="analyzing" && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
+                <div className="w-20 h-20 bg-gradient-to-br from-indigo-100 to-violet-100 rounded-3xl flex items-center justify-center mx-auto mb-5 shadow-sm">
+                  <Brain size={34} className="text-indigo-600 animate-pulse"/>
+                </div>
+                <p className="font-bold text-gray-900 text-xl mb-1">Scanning your receipt…</p>
+                <p className="text-gray-400 text-sm mb-2">GPT-4o is reading merchant, amount, date and category</p>
+                {uploadFileName && <p className="text-xs text-indigo-400 font-medium">{uploadFileName}</p>}
+                <div className="flex justify-center gap-2 mt-6">
+                  {[0,1,2,3].map(i=>(
+                    <div key={i} className="w-2.5 h-2.5 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay:`${i*120}ms`}}/>
+                  ))}
+                </div>
+                {uploadPreview && (
+                  <div className="mt-6 inline-block relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={uploadPreview} alt="receipt" className="max-h-32 rounded-xl border border-gray-100 shadow opacity-60"/>
+                    <div className="absolute inset-0 bg-indigo-50/60 rounded-xl flex items-center justify-center">
+                      <RefreshCw size={18} className="text-indigo-500 animate-spin"/>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── REVIEW & EDIT ────────────────────────────────────────── */}
+            {uploadStage==="review" && editedExpense && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                {/* Header */}
+                <div className="px-6 py-4 bg-gradient-to-r from-indigo-50 to-violet-50 border-b border-indigo-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 bg-indigo-100 rounded-lg flex items-center justify-center">
+                      <Brain size={13} className="text-indigo-600"/>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-900 text-sm">AI Extraction Complete</p>
+                      <p className="text-xs text-indigo-500">Review and edit before saving · {Math.round(editedExpense.confidence*100)}% confidence</p>
+                    </div>
+                  </div>
+                  <button onClick={resetUpload} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-white transition-colors">
+                    <X size={12}/> Reset
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-5">
+                  {/* Left: Receipt preview */}
+                  <div className="md:col-span-2 bg-slate-50 p-6 flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-gray-100 gap-4">
+                    {uploadPreview ? (
+                      <a href={uploadReceiptUrl||uploadPreview} target="_blank" rel="noreferrer" className="group">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={uploadPreview} alt="receipt" className="max-h-64 rounded-xl shadow-md border border-gray-100 group-hover:shadow-lg transition-shadow"/>
+                        <p className="text-xs text-center text-gray-400 mt-2">Click to view full size</p>
+                      </a>
+                    ) : (
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="w-20 h-24 bg-orange-50 rounded-xl border-2 border-orange-100 flex items-center justify-center">
+                          <FilePlus size={32} className="text-orange-400"/>
+                        </div>
+                        <p className="text-sm font-medium text-gray-600 text-center max-w-[160px] truncate">{uploadFileName}</p>
+                      </div>
+                    )}
+                    {/* Confidence badge */}
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${
+                      editedExpense.confidence>=0.8?"bg-green-50 text-green-700 border border-green-100":
+                      editedExpense.confidence>=0.5?"bg-amber-50 text-amber-700 border border-amber-100":
+                                                     "bg-red-50 text-red-700 border border-red-100"
+                    }`}>
+                      <Brain size={11}/>
+                      {Math.round(editedExpense.confidence*100)}% AI confidence
+                    </div>
+                  </div>
+
+                  {/* Right: Edit form */}
+                  <div className="md:col-span-3 p-6 space-y-4">
+                    <div className="flex items-center gap-2 mb-5">
+                      <span className="text-2xl">{CAT_EMOJI[editedExpense.category]||"📦"}</span>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Review Details</h3>
+                        <p className="text-xs text-gray-400">Edit any field before saving to dashboard</p>
+                      </div>
+                    </div>
+
+                    {/* Merchant */}
+                    <div>
+                      <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Merchant / Store</label>
+                      <input
+                        value={editedExpense.merchant}
+                        onChange={e=>setEditedExpense(p=>p?{...p,merchant:e.target.value}:p)}
+                        placeholder="e.g. Swiggy, Amazon"
+                        className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                      />
+                    </div>
+
+                    {/* Amount + Date */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Amount (₹)</label>
+                        <input
+                          type="number" min="0" step="0.01"
+                          value={editedExpense.amount}
+                          onChange={e=>setEditedExpense(p=>p?{...p,amount:e.target.value}:p)}
+                          placeholder="0.00"
+                          className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Date</label>
+                        <input
+                          type="date"
+                          value={editedExpense.date}
+                          onChange={e=>setEditedExpense(p=>p?{...p,date:e.target.value}:p)}
+                          className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Category */}
+                    <div>
+                      <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Category</label>
+                      <div className="relative">
+                        <select
+                          value={editedExpense.category}
+                          onChange={e=>setEditedExpense(p=>p?{...p,category:e.target.value}:p)}
+                          className="w-full appearance-none border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer pr-8"
+                        >
+                          {CATEGORIES.map(c=>(
+                            <option key={c} value={c}>{CAT_EMOJI[c]} {c}</option>
+                          ))}
+                        </select>
+                        <ChevronDown size={13} className="absolute right-3 top-3.5 text-gray-400 pointer-events-none"/>
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                      <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Description <span className="font-normal text-gray-300">(optional)</span></label>
+                      <input
+                        value={editedExpense.description}
+                        onChange={e=>setEditedExpense(p=>p?{...p,description:e.target.value}:p)}
+                        placeholder="e.g. Butter chicken + garlic naan"
+                        className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                      />
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex gap-2 pt-2">
+                      <button onClick={saveExpense}
+                        disabled={!editedExpense.merchant||!editedExpense.amount}
+                        className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2">
+                        <CheckCircle size={16}/> Save to Dashboard
+                      </button>
+                      <button onClick={resetUpload}
+                        className="px-4 py-3 border border-gray-200 text-gray-500 hover:bg-gray-50 rounded-xl transition-colors text-sm">
+                        Re-upload
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── SAVING ──────────────────────────────────────────────── */}
+            {uploadStage==="saving" && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
+                <div className="w-16 h-16 bg-indigo-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <RefreshCw size={26} className="text-indigo-500 animate-spin"/>
+                </div>
+                <p className="font-semibold text-gray-800">Saving to dashboard…</p>
+              </div>
+            )}
+
+            {/* ── SUCCESS ─────────────────────────────────────────────── */}
+            {uploadStage==="success" && editedExpense && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="p-8 text-center border-b border-gray-50">
+                  <div className="w-16 h-16 bg-green-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                    <CheckCircle size={30} className="text-green-500"/>
+                  </div>
+                  <p className="font-bold text-gray-900 text-xl mb-1">Saved successfully!</p>
+                  <p className="text-gray-400 text-sm">This expense is now in your dashboard</p>
+                </div>
+                <div className="mx-6 my-5 p-5 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">{CAT_EMOJI[editedExpense.category]||"📦"}</span>
+                      <div>
+                        <p className="font-bold text-gray-900">{editedExpense.merchant}</p>
+                        <p className="text-xs text-gray-500">{editedExpense.category} · {editedExpense.date}</p>
+                      </div>
+                    </div>
+                    <p className="text-2xl font-bold text-indigo-700">₹{Number(editedExpense.amount).toLocaleString("en-IN")}</p>
+                  </div>
+                  {!!editedExpense.description && <p className="text-xs text-gray-500 mt-3 pt-3 border-t border-indigo-100">{editedExpense.description}</p>}
+                </div>
+                <div className="px-6 pb-6 flex gap-3">
+                  <button onClick={resetUpload}
+                    className="flex-1 py-3 border border-gray-200 text-gray-600 hover:bg-gray-50 font-medium rounded-xl transition-colors text-sm">
+                    Upload Another
+                  </button>
+                  <button onClick={()=>setTab("Overview")}
+                    className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-sm flex items-center justify-center gap-2">
+                    <BarChart2 size={15}/> View Dashboard
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── ERROR ───────────────────────────────────────────────── */}
+            {uploadStage==="error" && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center space-y-4">
+                <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center mx-auto">
+                  <AlertTriangle size={26} className="text-red-500"/>
+                </div>
+                <div>
+                  <p className="font-semibold text-gray-900 mb-1">Something went wrong</p>
+                  <p className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-xl inline-block">{uploadError}</p>
+                </div>
+                <button onClick={resetUpload}
+                  className="px-8 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-sm">
+                  Try Again
+                </button>
+              </div>
+            )}
+
+            {/* Hidden file input */}
+            <input ref={uploadInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+              className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)handleUploadFile(f);e.target.value="";}}/>
+          </div>
+        )}
+
         <p className="text-center text-xs text-gray-400 mt-8 pb-4">
           EMSI · Expense Management System Intelligence · Powered by GPT-4o Vision + GPT-4o mini
         </p>
@@ -880,177 +1202,6 @@ export default function Dashboard() {
                 className="w-11 h-11 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-xl flex items-center justify-center transition-colors flex-shrink-0">
                 <Send size={15} className="text-white"/>
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Upload Modal ──────────────────────────────────────────────── */}
-      {uploadOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={closeUpload}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e=>e.stopPropagation()}>
-
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center">
-                  <Upload size={17} className="text-indigo-600"/>
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-900">Upload Receipt</h3>
-                  <p className="text-xs text-gray-400">Image or PDF · AI extracts automatically</p>
-                </div>
-              </div>
-              <button onClick={closeUpload} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition-colors">
-                <X size={18}/>
-              </button>
-            </div>
-
-            <div className="p-6">
-
-              {/* ── IDLE: Drag & drop zone ── */}
-              {(uploadStage==="idle") && (
-                <div
-                  onDragOver={e=>{e.preventDefault();setUploadDrag(true);}}
-                  onDragLeave={()=>setUploadDrag(false)}
-                  onDrop={e=>{e.preventDefault();setUploadDrag(false);const f=e.dataTransfer.files[0];if(f)handleUploadFile(f);}}
-                  onClick={()=>uploadInputRef.current?.click()}
-                  className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
-                    uploadDrag ? "border-indigo-400 bg-indigo-50" : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30"
-                  }`}
-                >
-                  <div className="flex justify-center gap-3 mb-4">
-                    <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center">
-                      <FileImage size={22} className="text-indigo-500"/>
-                    </div>
-                    <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center">
-                      <FilePlus size={22} className="text-orange-500"/>
-                    </div>
-                  </div>
-                  <p className="font-semibold text-gray-800 mb-1">Drop your receipt here</p>
-                  <p className="text-sm text-gray-400 mb-3">or click to browse files</p>
-                  <div className="flex justify-center gap-2">
-                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full">JPEG / PNG / WebP</span>
-                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full">PDF</span>
-                  </div>
-                </div>
-              )}
-
-              {/* ── PREVIEW: File selected ── */}
-              {uploadStage==="preview" && uploadFile && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl border border-gray-100">
-                    {uploadPreview ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={uploadPreview} alt="preview" className="w-14 h-14 rounded-lg object-cover border border-gray-200 flex-shrink-0"/>
-                    ) : (
-                      <div className="w-14 h-14 bg-orange-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <FilePlus size={24} className="text-orange-500"/>
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 text-sm truncate">{uploadFile.name}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {(uploadFile.size / 1024).toFixed(0)} KB · {uploadFile.type.includes("pdf") ? "PDF" : "Image"}
-                      </p>
-                    </div>
-                    <button onClick={()=>{setUploadStage("idle");setUploadFile(null);setUploadPreview(null);}}
-                      className="text-gray-400 hover:text-red-500 transition-colors p-1">
-                      <X size={14}/>
-                    </button>
-                  </div>
-                  <button onClick={analyzeUpload}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2">
-                    <Sparkles size={16}/> Analyze with AI
-                  </button>
-                  <button onClick={()=>uploadInputRef.current?.click()}
-                    className="w-full py-2 text-sm text-gray-400 hover:text-indigo-600 transition-colors">
-                    Choose a different file
-                  </button>
-                </div>
-              )}
-
-              {/* ── ANALYZING: Loading state ── */}
-              {uploadStage==="analyzing" && (
-                <div className="py-10 text-center space-y-4">
-                  <div className="w-16 h-16 bg-gradient-to-br from-indigo-100 to-violet-100 rounded-2xl flex items-center justify-center mx-auto">
-                    <Brain size={28} className="text-indigo-600 animate-pulse"/>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-800">AI is reading your receipt…</p>
-                    <p className="text-sm text-gray-400 mt-1">Extracting merchant, amount, category</p>
-                  </div>
-                  <div className="flex justify-center gap-1.5">
-                    {[0,1,2].map(i=>(
-                      <div key={i} className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay:`${i*150}ms`}}/>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ── SUCCESS: Expense extracted & saved ── */}
-              {uploadStage==="success" && uploadResult && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-green-600 mb-2">
-                    <CheckCircle size={18}/>
-                    <span className="font-semibold text-sm">Expense saved to dashboard!</span>
-                  </div>
-                  <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl p-5 border border-indigo-100 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-2xl">{CAT_EMOJI[String(uploadResult.category)]||"📦"}</span>
-                        <div>
-                          <p className="font-bold text-gray-900">{String(uploadResult.merchant||"Unknown")}</p>
-                          <p className="text-xs text-gray-500">{String(uploadResult.category)} · {String(uploadResult.subcategory||"")}</p>
-                        </div>
-                      </div>
-                      <p className="text-2xl font-bold text-indigo-700">₹{Number(uploadResult.amount).toLocaleString("en-IN")}</p>
-                    </div>
-                    {!!uploadResult.description && (
-                      <p className="text-xs text-gray-500 border-t border-indigo-100 pt-3">{String(uploadResult.description)}</p>
-                    )}
-                    <div className="flex items-center gap-1 text-xs text-gray-400">
-                      <span>Date:</span>
-                      <span className="font-medium text-gray-600">{String(uploadResult.date||"")}</span>
-                      <span className="ml-auto">Confidence: {Math.round(Number(uploadResult.confidence||0)*100)}%</span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={()=>{setUploadStage("idle");setUploadFile(null);setUploadPreview(null);setUploadResult(null);}}
-                      className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-                      Upload Another
-                    </button>
-                    <button onClick={closeUpload}
-                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 rounded-xl text-sm text-white font-semibold transition-colors">
-                      Done
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* ── ERROR ── */}
-              {uploadStage==="error" && (
-                <div className="space-y-4">
-                  <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3">
-                    <AlertTriangle size={18} className="text-red-500 flex-shrink-0 mt-0.5"/>
-                    <p className="text-sm text-red-700">{uploadError}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={()=>setUploadStage(uploadFile?"preview":"idle")}
-                      className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-                      Try Again
-                    </button>
-                    <button onClick={closeUpload}
-                      className="flex-1 py-2.5 bg-gray-100 rounded-xl text-sm text-gray-600 hover:bg-gray-200 transition-colors">
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Hidden file input */}
-              <input ref={uploadInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
-                className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)handleUploadFile(f);e.target.value="";}}/>
             </div>
           </div>
         </div>

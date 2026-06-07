@@ -1,3 +1,13 @@
+/**
+ * POST /api/upload
+ *
+ * Step 1 of 2 in the upload flow.
+ * Extracts expense data from the uploaded file using AI + uploads the file
+ * to Supabase Storage for the receipt thumbnail.
+ *
+ * Does NOT write to the transactions table — that happens in /api/upload/save
+ * after the user reviews and edits the extracted data.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import OpenAI from "openai";
@@ -37,11 +47,10 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(bytes);
     const mime   = file.type || "application/octet-stream";
 
-    // ── Step 1: Extract expense with AI ─────────────────────────────────
+    // ── AI Extraction ────────────────────────────────────────────────────
     let expense: Record<string, unknown>;
 
     if (VALID_IMAGE_TYPES.has(mime)) {
-      // GPT-4o Vision for images
       const base64 = buffer.toString("base64");
       const result = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -58,13 +67,14 @@ export async function POST(req: NextRequest) {
       expense = JSON.parse(result.choices[0].message.content || "{}");
 
     } else if (mime === "application/pdf") {
-      // pdf-parse for text PDFs — import the lib directly to avoid test-file issue
+      // pdf-parse v2: class-based API — no test-file loading side-effects
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
-        buf: Buffer
-      ) => Promise<{ text: string; numpages: number }>;
+      const { PDFParse } = require("pdf-parse") as {
+        PDFParse: new (opts: { data: Buffer }) => { getText(): Promise<{ text: string; total: number }> }
+      };
 
-      const pdfData = await pdfParse(buffer);
+      const parser  = new PDFParse({ data: buffer });
+      const pdfData = await parser.getText();
       const text    = pdfData.text?.trim() || "";
 
       if (text.length < 80) {
@@ -77,7 +87,7 @@ export async function POST(req: NextRequest) {
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user",   content: `[PDF Receipt – ${pdfData.numpages} page(s)]\n${text.slice(0, 6000)}` },
+          { role: "user",   content: `[PDF Receipt – ${pdfData.total} page(s)]\n${text.slice(0, 6000)}` },
         ],
         response_format: { type: "json_object" },
         max_tokens: 300,
@@ -96,9 +106,9 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    // ── Step 2: Upload to Supabase Storage ──────────────────────────────
-    const ext      = mime.includes("pdf") ? "pdf" : mime.split("/")[1] || "jpg";
-    const fileName = `web/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+    // ── Upload file to Supabase Storage (for receipt thumbnail) ─────────
+    const ext      = mime.includes("pdf") ? "pdf" : (mime.split("/")[1] || "jpg");
+    const fileName = `web/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     let receiptUrl: string | null = null;
 
     const { error: storageErr } = await supabase.storage
@@ -109,48 +119,17 @@ export async function POST(req: NextRequest) {
       const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(fileName);
       receiptUrl = urlData?.publicUrl ?? null;
     }
-    // (Storage failure is non-fatal — expense still saves without a thumbnail)
+    // Non-fatal: user can still review & save without a thumbnail
 
-    // ── Step 3: Ensure "web_upload" user exists ─────────────────────────
-    const WEB_PHONE = "web_upload";
-    let userId: string;
-    const { data: existing } = await supabase
-      .from("users").select("id").eq("phone", WEB_PHONE).maybeSingle();
-
-    if (existing) {
-      userId = existing.id;
-    } else {
-      const { data: created, error: createErr } = await supabase
-        .from("users").insert({ phone: WEB_PHONE }).select("id").single();
-      if (createErr) throw createErr;
-      userId = created.id;
-    }
-
-    // ── Step 4: Save transaction ─────────────────────────────────────────
-    const { data: transaction, error: txErr } = await supabase
-      .from("transactions")
-      .insert({
-        user_id:      userId,
-        merchant:     String(expense.merchant  || "Unknown"),
-        amount:       Number(expense.amount)   || 0,
-        category:     String(expense.category  || "Other"),
-        subcategory:  String(expense.subcategory || ""),
-        description:  String(expense.description || ""),
-        expense_date: String(expense.date || new Date().toISOString().slice(0, 10)),
-        confidence:   Number(expense.confidence) || 1.0,
-        currency:     String(expense.currency || "INR"),
-        raw_input:    `[web_upload] ${file.name}`.slice(0, 500),
-        receipt_url:  receiptUrl,
-      })
-      .select()
-      .single();
-
-    if (txErr) throw txErr;
-
-    return NextResponse.json({ expense, transaction, receiptUrl });
+    // Return extracted data + receipt URL — NO DB write yet
+    return NextResponse.json({
+      expense,
+      receiptUrl,
+      fileName: file.name,
+    });
 
   } catch (err) {
-    console.error("Upload route error:", err);
+    console.error("Upload/extract error:", err);
     return NextResponse.json({ error: "Processing failed. Please try again." }, { status: 500 });
   }
 }
