@@ -3,6 +3,21 @@ import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Returns the best display date for a transaction.
+ * WhatsApp AI often extracts wrong historical years (e.g., "yesterday" → 2023).
+ * Rule: if expense_date is within 45 days of created_at, trust it; otherwise
+ * fall back to created_at so the transaction appears in the correct logged month.
+ */
+function resolveDate(expenseDate: string | null, createdAt: string): string {
+  if (!expenseDate) return createdAt.slice(0, 10);
+  const diff = Math.abs(
+    new Date(createdAt).getTime() - new Date(expenseDate + "T12:00:00").getTime()
+  );
+  const days = diff / (1000 * 60 * 60 * 24);
+  return days <= 45 ? expenseDate : createdAt.slice(0, 10);
+}
+
 const SMART_BUDGETS: Record<string, number> = {
   Food: 6000, Transport: 4000, Shopping: 5000,
   Entertainment: 3000, Health: 3000, Utilities: 4000,
@@ -27,14 +42,19 @@ export async function GET(req: Request) {
   const nextMonth = new Date(selYear, selMonth + 1, 1).toISOString().slice(0, 7);
   const prevStart = new Date(selYear, selMonth - 1, 1).toISOString().slice(0, 7);
 
+  // Filter by created_at (when the transaction was logged) — NOT expense_date.
+  // Reason: WhatsApp AI often extracts wrong historical dates (e.g., 2023) from
+  // text like "yesterday", making expense_date unreliable for month grouping.
+  // Web-upload receipts have correct expense_date but their created_at is also
+  // recent, so created_at-based filtering works for both sources.
   const [{ data: curr }, { data: prev }] = await Promise.all([
     supabase.from("transactions").select("*")
-      .gte("expense_date", `${yearMonth}-01`)
-      .lt("expense_date",  `${nextMonth}-01`)
-      .order("created_at", { ascending: false }),   // most-recently-logged first
+      .gte("created_at", `${yearMonth}-01`)
+      .lt("created_at",  `${nextMonth}-01`)
+      .order("created_at", { ascending: false }),
     supabase.from("transactions").select("*")
-      .gte("expense_date", `${prevStart}-01`)
-      .lt("expense_date",  `${yearMonth}-01`),
+      .gte("created_at", `${prevStart}-01`)
+      .lt("created_at",  `${yearMonth}-01`),
   ]);
 
   const transactions = curr || [];
@@ -68,20 +88,20 @@ export async function GET(req: Request) {
     .sort((a, b) => b.total - a.total)
     .slice(0, 6);
 
-  // Daily trend — group by expense_date so the chart reflects when money was spent
+  // Daily trend — group by the "display date" (expense_date when reliable, else created_at)
   const byDay: Record<string, number> = {};
   for (const t of transactions) {
-    const d = (t.expense_date || t.created_at).slice(0, 10);
+    const d = resolveDate(t.expense_date, t.created_at);
     byDay[d] = (byDay[d] || 0) + Number(t.amount);
   }
   const trend = Object.entries(byDay)
     .map(([date, amount]) => ({ date, amount: Math.round(amount) }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // Day of week heatmap (0=Sun...6=Sat) — use expense_date for accuracy
+  // Day of week heatmap (0=Sun...6=Sat)
   const byDow: Record<number, number> = { 0:0,1:0,2:0,3:0,4:0,5:0,6:0 };
   for (const t of transactions) {
-    const dow = new Date((t.expense_date || t.created_at) + "T12:00:00").getDay();
+    const dow = new Date(resolveDate(t.expense_date, t.created_at) + "T12:00:00").getDay();
     byDow[dow] = (byDow[dow] || 0) + Number(t.amount);
   }
   const dowLabels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -140,6 +160,7 @@ export async function GET(req: Request) {
       id: t.id, merchant: t.merchant, amount: t.amount, category: t.category,
       description: t.description, created_at: t.created_at,
       expense_date: t.expense_date ?? null,
+      display_date: resolveDate(t.expense_date, t.created_at), // reliable display date
       receipt_url: t.receipt_url ?? null,
     })),
     month: selDate.toLocaleString("default", { month: "long", year: "numeric" }),

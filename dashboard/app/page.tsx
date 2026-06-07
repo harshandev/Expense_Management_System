@@ -40,7 +40,7 @@ interface Summary {
   monthComparison:{category:string;current:number;previous:number}[];
   budgetTracker:{category:string;spent:number;budget:number;pct:number;over:boolean}[];
   topMerchants:{name:string;total:number;count:number;avg:number}[];
-  recent:{id:string;merchant:string;amount:number;category:string;description:string;created_at:string;expense_date:string|null;receipt_url:string|null}[];
+  recent:{id:string;merchant:string;amount:number;category:string;description:string;created_at:string;expense_date:string|null;display_date:string;receipt_url:string|null}[];
   scoreBreakdown:{budgetAdherence:number;diversity:number;spendControl:number};
 }
 interface Insight {type:string;icon:string;title:string;message:string;}
@@ -648,7 +648,7 @@ export default function Dashboard() {
                               merchant: t.merchant||"Unknown",
                               amount: t.amount,
                               category: t.category,
-                              date: new Date(((t.expense_date || t.created_at.slice(0,10)) + "T12:00:00")).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}),
+                              date: new Date(t.display_date + "T12:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}),
                               isPdf: t.receipt_url!.toLowerCase().includes(".pdf"),
                             })}
                             title="View receipt"
@@ -664,7 +664,7 @@ export default function Dashboard() {
                         )}
                         <div>
                           <p className="font-medium text-gray-900 text-sm">{t.merchant||"Unknown"}</p>
-                          <p className="text-xs text-gray-400">{t.category} · {new Date((t.expense_date || t.created_at) + (t.expense_date ? "T12:00:00" : "")).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
+                          <p className="text-xs text-gray-400">{t.category} · {new Date(t.display_date + "T12:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
                         </div>
                       </div>
                       <p className="font-bold text-gray-900">₹{Number(t.amount).toLocaleString("en-IN")}</p>
