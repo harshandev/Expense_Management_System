@@ -42,6 +42,9 @@ type MetaShape = {
   line_items?: { name:string; qty:number; price:number }[];
   merchant_phone?: string;
   merchant_address?: string;
+  billed_to?: string;    // name extracted from the physical receipt (customer/addressee)
+  prepared_by?: string;  // cashier / server name if printed
+  uploaded_by?: string;  // person who logged this receipt via the web dashboard
 };
 
 interface Summary {
@@ -124,7 +127,8 @@ export default function Dashboard() {
   const [toasts,        setToasts]        = useState<Toast[]>([]);
   const [userName,      setUserName]      = useState("");
   const [nameInput,     setNameInput]     = useState("");
-  const [showNameModal,  setShowNameModal]  = useState(false);
+  const [showNameModal,     setShowNameModal]     = useState(false);
+  const [pendingUploadFile, setPendingUploadFile] = useState<File|null>(null); // held while name modal is open
 
   // User picker (admin: switch between users)
   const [users,          setUsers]          = useState<UserRow[]>([]);
@@ -228,6 +232,22 @@ export default function Dashboard() {
     setShowNameModal(false);
     setNameInput("");
     showToast(`Welcome, ${n}! 👋`, "success");
+    // If a file was waiting on the name, start uploading it now
+    if (pendingUploadFile) {
+      const file = pendingUploadFile;
+      setPendingUploadFile(null);
+      resetUpload();
+      setUploadFile(file);
+      setUploadFileName(file.name);
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = e => setUploadPreview(e.target?.result as string);
+        reader.readAsDataURL(file);
+      }
+      setUploadStage("analyzing");
+      setTab("Upload");
+      analyzeFile(file);
+    }
   };
 
   // ── Upload helpers ─────────────────────────────────────────────────────
@@ -240,6 +260,12 @@ export default function Dashboard() {
 
   const handleUploadFile = (file: File) => {
     if (!file) return;
+    // Name is mandatory — gate the upload until the user sets one
+    if (!userName.trim()) {
+      setPendingUploadFile(file);
+      setShowNameModal(true);
+      return;
+    }
     resetUpload();
     setUploadFile(file);
     setUploadFileName(file.name);
@@ -295,6 +321,7 @@ export default function Dashboard() {
           fileName:    uploadFileName,
           metadata:    uploadMetadata,
           receiptHash: uploadFileHash,
+          uploadedBy:  userName || null,
         }),
       });
       const json = await res.json();
@@ -855,7 +882,15 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <p className="font-medium text-gray-900 text-sm">{t.merchant||"Unknown"}</p>
-                          <p className="text-xs text-gray-400">{t.category} · {new Date(t.display_date + "T12:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
+                          <p className="text-xs text-gray-400">
+                            {t.category} · {new Date(t.display_date + "T12:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short"})}
+                            {(t.metadata as MetaShape|null)?.uploaded_by && (
+                              <span className="text-indigo-400"> · 👤 {(t.metadata as MetaShape).uploaded_by}</span>
+                            )}
+                            {(t.metadata as MetaShape|null)?.billed_to && (
+                              <span className="text-emerald-500"> · 📋 {(t.metadata as MetaShape).billed_to}</span>
+                            )}
+                          </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2.5">
@@ -1344,6 +1379,20 @@ export default function Dashboard() {
                       <Brain size={11}/>
                       {Math.round(editedExpense.confidence*100)}% AI confidence
                     </div>
+                    {/* Uploader badge */}
+                    {userName && (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                        <UserCircle size={11}/>
+                        Logging as {userName}
+                      </div>
+                    )}
+                    {/* Billed-to from receipt (if AI extracted it) */}
+                    {uploadMetadata && (uploadMetadata as MetaShape).billed_to && (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                        <Receipt size={11}/>
+                        Billed to: {String((uploadMetadata as MetaShape).billed_to)}
+                      </div>
+                    )}
                   </div>
 
                   {/* Right: Edit form */}
@@ -1712,17 +1761,30 @@ export default function Dashboard() {
 
       {/* ── Name Modal ────────────────────────────────────────────────── */}
       {showNameModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={()=>setShowNameModal(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          onClick={()=>{ if (!pendingUploadFile) { setShowNameModal(false); } }}>
           <div className="bg-white rounded-2xl shadow-2xl p-6 w-80 mx-4" onClick={e=>e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                <UserCircle size={20} className="text-indigo-600"/>
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${pendingUploadFile ? "bg-amber-50" : "bg-indigo-50"}`}>
+                <UserCircle size={20} className={pendingUploadFile ? "text-amber-600" : "text-indigo-600"}/>
               </div>
               <div>
-                <h3 className="font-bold text-gray-900">Your Name</h3>
-                <p className="text-xs text-gray-400">Personalise your dashboard</p>
+                <h3 className="font-bold text-gray-900">
+                  {pendingUploadFile ? "Who's uploading this?" : "Your Name"}
+                </h3>
+                <p className="text-xs text-gray-400">
+                  {pendingUploadFile
+                    ? "Your name is saved with every receipt you log"
+                    : "Personalise your dashboard"}
+                </p>
               </div>
             </div>
+            {pendingUploadFile && (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mb-4">
+                <Receipt size={13} className="text-amber-500 flex-shrink-0"/>
+                <p className="text-xs text-amber-700 font-medium truncate">{pendingUploadFile.name}</p>
+              </div>
+            )}
             <input
               autoFocus
               value={nameInput}
@@ -1732,13 +1794,21 @@ export default function Dashboard() {
               className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 mb-4"
             />
             <div className="flex gap-2">
-              <button onClick={()=>setShowNameModal(false)}
-                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 hover:bg-gray-50 transition-colors">
-                Cancel
-              </button>
+              {!pendingUploadFile && (
+                <button onClick={()=>setShowNameModal(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 hover:bg-gray-50 transition-colors">
+                  Cancel
+                </button>
+              )}
+              {pendingUploadFile && (
+                <button onClick={()=>{ setPendingUploadFile(null); setShowNameModal(false); }}
+                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-500 hover:bg-gray-50 transition-colors">
+                  Cancel Upload
+                </button>
+              )}
               <button onClick={saveName} disabled={!nameInput.trim()}
                 className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-sm text-white font-semibold transition-colors">
-                Save
+                {pendingUploadFile ? "Save & Upload →" : "Save"}
               </button>
             </div>
           </div>
@@ -1914,6 +1984,26 @@ export default function Dashboard() {
                     {/* Description */}
                     {receiptView.description && (
                       <p className="text-sm text-gray-600 italic">"{receiptView.description}"</p>
+                    )}
+                    {/* Who uploaded + who's billed */}
+                    {(meta?.uploaded_by || meta?.billed_to || meta?.prepared_by) && (
+                      <div className="flex flex-wrap gap-2 pb-1 border-b border-gray-100">
+                        {meta?.uploaded_by && (
+                          <span className="text-xs bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 py-1 rounded-full font-medium">
+                            👤 Uploaded by {String(meta.uploaded_by)}
+                          </span>
+                        )}
+                        {meta?.billed_to && (
+                          <span className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 px-2.5 py-1 rounded-full font-medium">
+                            📋 Billed to {String(meta.billed_to)}
+                          </span>
+                        )}
+                        {meta?.prepared_by && (
+                          <span className="text-xs bg-amber-50 text-amber-700 border border-amber-100 px-2.5 py-1 rounded-full">
+                            🧾 Served by {String(meta.prepared_by)}
+                          </span>
+                        )}
+                      </div>
                     )}
                     {/* Chips row: payment method, UPI, order ID, invoice */}
                     <div className="flex flex-wrap gap-2">
