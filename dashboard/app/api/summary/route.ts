@@ -37,10 +37,15 @@ export async function GET(req: Request) {
     selYear  = y;
     selMonth = m - 1; // convert to 0-indexed
   }
-  const selDate   = new Date(selYear, selMonth, 1);
-  const yearMonth = selDate.toISOString().slice(0, 7);
-  const nextMonth = new Date(selYear, selMonth + 1, 1).toISOString().slice(0, 7);
-  const prevStart = new Date(selYear, selMonth - 1, 1).toISOString().slice(0, 7);
+  const selDate   = new Date(selYear, selMonth, 1); // local time — used for display only
+  // Build YYYY-MM strings arithmetically to avoid toISOString() UTC-shift bug
+  // (IST = UTC+5:30: new Date(2026,5,1).toISOString() → "2026-05-31T18:30:00Z" → "2026-05" ← wrong)
+  const pad       = (n: number) => String(n).padStart(2, "0");
+  const yearMonth = `${selYear}-${pad(selMonth + 1)}`;
+  const [nextYear, nextMon] = selMonth === 11 ? [selYear + 1, 1] : [selYear, selMonth + 2];
+  const nextMonth = `${nextYear}-${pad(nextMon)}`;
+  const [prevYear, prevMon] = selMonth === 0  ? [selYear - 1, 12] : [selYear, selMonth];
+  const prevStart = `${prevYear}-${pad(prevMon)}`;
 
   // Filter by created_at (when the transaction was logged) — NOT expense_date.
   // Reason: WhatsApp AI often extracts wrong historical dates (e.g., 2023) from
@@ -130,7 +135,7 @@ export async function GET(req: Request) {
 
   // Health score (multi-factor)
   const totalDaysInMonth = new Date(selYear, selMonth + 1, 0).getDate(); // e.g. 31 for May
-  const isCurrentMonth   = yearMonth === now.toISOString().slice(0, 7);
+  const isCurrentMonth   = selYear === now.getFullYear() && selMonth === now.getMonth();
   const daysElapsed      = isCurrentMonth ? now.getDate() : totalDaysInMonth;
   // project daily rate × full days in month (not hardcoded 30)
   const projectedTotal   = daysElapsed > 0 ? (total / daysElapsed) * totalDaysInMonth : 0;
