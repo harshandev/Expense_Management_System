@@ -28,12 +28,13 @@ export async function POST(req: NextRequest) {
       fileName:    string;
       metadata:    Record<string, unknown> | null;
       receiptHash: string | null;
+      uploadedBy:  string | null; // name of the person uploading this receipt
     };
 
     const {
       merchant, amount, category, subcategory, date,
       description, confidence, receiptUrl, fileName,
-      metadata, receiptHash,
+      metadata, receiptHash, uploadedBy,
     } = body;
 
     if (!merchant || !amount) {
@@ -69,8 +70,12 @@ export async function POST(req: NextRequest) {
       receipt_url:  receiptUrl ?? null,
     };
 
-    // Conditionally add metadata / hash — graceful if columns don't exist yet
-    if (metadata)    insertPayload.metadata     = metadata;
+    // Merge uploaded_by into metadata so it travels with the transaction forever
+    const enrichedMetadata: Record<string, unknown> = {
+      ...(metadata || {}),
+      ...(uploadedBy?.trim() ? { uploaded_by: uploadedBy.trim() } : {}),
+    };
+    if (Object.keys(enrichedMetadata).length > 0) insertPayload.metadata = enrichedMetadata;
     if (receiptHash) insertPayload.receipt_hash = receiptHash;
 
     const { data: transaction, error: txErr } = await supabase
@@ -100,7 +105,7 @@ export async function POST(req: NextRequest) {
           .select()
           .single();
         if (e2) throw e2;
-        return NextResponse.json({ transaction: t2, migrationPending: true, anomaly: null });
+        return NextResponse.json({ transaction: t2, migrationPending: true, anomaly: null, uploadedBy: uploadedBy ?? null });
       }
       throw txErr;
     }

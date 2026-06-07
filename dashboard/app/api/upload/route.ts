@@ -44,6 +44,8 @@ Extract expense information and return ONLY a valid JSON object with these exact
   - merchant_phone: string or null
   - merchant_address: string or null
   - upi_ref: string or null (UPI transaction reference / UTR number)
+  - billed_to: string or null (name of the person or company this receipt/bill is addressed to — look for "Billed to", "Customer name", "Name:", handwritten names, or any personal name printed on the bill)
+  - prepared_by: string or null (cashier, server, salesperson, or staff member name if printed on receipt — look for "Served by", "Cashier:", "Prepared by", etc.)
 
 Indian context: UPI payments common, merchants include Swiggy/Zomato/Amazon/Zepto/Blinkit/BigBasket.
 Amounts shown as ₹ or Rs. CGST+SGST = GST in most cases.
