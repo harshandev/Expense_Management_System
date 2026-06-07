@@ -2,13 +2,16 @@
  * POST /api/upload
  *
  * Step 1 of 2 in the upload flow.
- * Extracts expense data from the uploaded file using AI + uploads the file
- * to Supabase Storage for the receipt thumbnail.
+ * Extracts expense data + rich metadata from the uploaded file using AI,
+ * uploads the file to Supabase Storage for the receipt thumbnail,
+ * checks for duplicate receipt (SHA-256 hash), and returns everything to
+ * the client for review.
  *
  * Does NOT write to the transactions table — that happens in /api/upload/save
  * after the user reviews and edits the extracted data.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "crypto";
 import { supabase } from "@/lib/supabase";
 import OpenAI from "openai";
 
@@ -20,19 +23,31 @@ const VALID_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "ima
 
 const SYSTEM_PROMPT = `You are an AI expense extraction assistant for an Indian expense tracking app.
 
-Extract expense information and return ONLY a valid JSON object with these fields:
-- is_expense: boolean (true if this contains expense info)
+Extract expense information and return ONLY a valid JSON object with these exact fields:
+- is_expense: boolean (true if this contains expense/payment info)
 - merchant: string (merchant/store/restaurant name)
-- amount: number (rupees, numeric only, no symbols)
+- amount: number (TOTAL amount paid — rupees, numeric only, no symbols)
 - category: string (exactly one of: Food, Transport, Shopping, Entertainment, Health, Utilities, Education, Investment, Other)
-- subcategory: string (specific e.g. "Food Delivery", "Groceries", "Petrol", "Movie")
-- date: string (YYYY-MM-DD format, use today's date if not found)
-- description: string (one line summary)
+- subcategory: string (specific e.g. "Food Delivery", "Groceries", "Petrol", "Movie Tickets")
+- date: string (YYYY-MM-DD format; use today if not found)
+- description: string (one-line summary of what was purchased)
 - confidence: number (0.0 to 1.0)
 - currency: string (default "INR")
+- metadata: object with:
+  - payment_method: string — one of "UPI", "Card", "Cash", "Net Banking", "Wallet", "Unknown"
+  - order_id: string or null (order / booking / transaction ID printed on receipt)
+  - invoice_number: string or null
+  - subtotal: number or null (amount before tax/discount)
+  - discount: number or null
+  - taxes: { gst: number|null, cgst: number|null, sgst: number|null, igst: number|null, total_tax: number|null }
+  - line_items: array of up to 10 { name: string, qty: number, price: number }
+  - merchant_phone: string or null
+  - merchant_address: string or null
+  - upi_ref: string or null (UPI transaction reference / UTR number)
 
-Indian context: UPI payments, Swiggy/Zomato/Amazon/Zepto/Blinkit are common. Amounts in ₹ or Rs.
-Return ONLY valid JSON. No explanation, no markdown, no code blocks.`;
+Indian context: UPI payments common, merchants include Swiggy/Zomato/Amazon/Zepto/Blinkit/BigBasket.
+Amounts shown as ₹ or Rs. CGST+SGST = GST in most cases.
+Return ONLY valid JSON. No markdown, no code blocks, no explanation.`;
 
 export async function POST(req: NextRequest) {
   try {
@@ -47,7 +62,28 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(bytes);
     const mime   = file.type || "application/octet-stream";
 
-    // ── AI Extraction ────────────────────────────────────────────────────
+    // ── SHA-256 hash for duplicate detection ────────────────────────────────
+    const fileHash = createHash("sha256").update(buffer).digest("hex");
+
+    // ── Check for duplicate receipt (non-fatal if column doesn't exist yet) ─
+    let duplicate: {
+      id: string; merchant: string; amount: number;
+      expense_date: string; receipt_url: string | null;
+    } | null = null;
+
+    try {
+      const { data: dupData } = await supabase
+        .from("transactions")
+        .select("id, merchant, amount, expense_date, receipt_url")
+        .eq("receipt_hash", fileHash)
+        .limit(1)
+        .maybeSingle();
+      duplicate = dupData ?? null;
+    } catch {
+      // Column may not exist yet — silently skip
+    }
+
+    // ── AI Extraction ────────────────────────────────────────────────────────
     let expense: Record<string, unknown>;
 
     if (VALID_IMAGE_TYPES.has(mime)) {
@@ -62,7 +98,7 @@ export async function POST(req: NextRequest) {
           ],
         }],
         response_format: { type: "json_object" },
-        max_tokens: 500,
+        max_tokens: 800,
       });
       expense = JSON.parse(result.choices[0].message.content || "{}");
 
@@ -90,7 +126,7 @@ export async function POST(req: NextRequest) {
           { role: "user",   content: `[PDF Receipt – ${pdfData.total} page(s)]\n${text.slice(0, 6000)}` },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 300,
+        max_tokens: 600,
       });
       expense = JSON.parse(result.choices[0].message.content || "{}");
 
@@ -106,7 +142,7 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    // ── Upload file to Supabase Storage (for receipt thumbnail) ─────────
+    // ── Upload file to Supabase Storage (for receipt thumbnail) ─────────────
     const ext      = mime.includes("pdf") ? "pdf" : (mime.split("/")[1] || "jpg");
     const fileName = `web/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     let receiptUrl: string | null = null;
@@ -121,11 +157,13 @@ export async function POST(req: NextRequest) {
     }
     // Non-fatal: user can still review & save without a thumbnail
 
-    // Return extracted data + receipt URL — NO DB write yet
+    // Return extracted data + metadata + hash + duplicate check — NO DB write yet
     return NextResponse.json({
       expense,
       receiptUrl,
       fileName: file.name,
+      fileHash,
+      duplicate,
     });
 
   } catch (err) {
