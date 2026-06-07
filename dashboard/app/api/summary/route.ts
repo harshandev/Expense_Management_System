@@ -26,7 +26,8 @@ const SMART_BUDGETS: Record<string, number> = {
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const monthParam = searchParams.get("month"); // e.g. "2026-03"
+  const monthParam = searchParams.get("month");   // e.g. "2026-03"
+  const userId     = searchParams.get("userId");  // filter by specific user (admin use)
 
   const now = new Date();
   // Parse selected month or default to current
@@ -52,15 +53,17 @@ export async function GET(req: Request) {
   // text like "yesterday", making expense_date unreliable for month grouping.
   // Web-upload receipts have correct expense_date but their created_at is also
   // recent, so created_at-based filtering works for both sources.
-  const [{ data: curr }, { data: prev }] = await Promise.all([
-    supabase.from("transactions").select("*")
-      .gte("created_at", `${yearMonth}-01`)
-      .lt("created_at",  `${nextMonth}-01`)
-      .order("created_at", { ascending: false }),
-    supabase.from("transactions").select("*")
-      .gte("created_at", `${prevStart}-01`)
-      .lt("created_at",  `${yearMonth}-01`),
-  ]);
+  let currQ = supabase.from("transactions").select("*")
+    .gte("created_at", `${yearMonth}-01`)
+    .lt("created_at",  `${nextMonth}-01`)
+    .order("created_at", { ascending: false });
+  let prevQ = supabase.from("transactions").select("*")
+    .gte("created_at", `${prevStart}-01`)
+    .lt("created_at",  `${yearMonth}-01`);
+  // Admin: filter by specific user when requested
+  if (userId) { currQ = currQ.eq("user_id", userId); prevQ = prevQ.eq("user_id", userId); }
+
+  const [{ data: curr }, { data: prev }] = await Promise.all([currQ, prevQ]);
 
   const transactions = curr || [];
   const previous     = prev || [];
@@ -167,6 +170,7 @@ export async function GET(req: Request) {
       expense_date: t.expense_date ?? null,
       display_date: resolveDate(t.expense_date, t.created_at), // reliable display date
       receipt_url: t.receipt_url ?? null,
+      metadata: t.metadata ?? null, // rich metadata (line items, taxes, payment method…)
     })),
     month: selDate.toLocaleString("default", { month: "long", year: "numeric" }),
     yearMonth,
