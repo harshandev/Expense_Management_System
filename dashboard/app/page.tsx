@@ -131,6 +131,34 @@ export default function Dashboard() {
   const [selectedUserId, setSelectedUserId] = useState<string>("");
   const selectedUserIdRef = useRef<string>("");
 
+  // Anomaly detection (set after upload save)
+  const [uploadAnomaly,  setUploadAnomaly]  = useState<{level:"high"|"medium"|null;message:string}|null>(null);
+
+  // Natural-language search
+  const [aiSearchQ,       setAiSearchQ]      = useState("");
+  const [aiSearchActive,  setAiSearchActive] = useState(false);
+  const [aiSearchResults, setAiSearchResults]= useState<Summary["recent"]>([]);
+  const [aiSearchDesc,    setAiSearchDesc]   = useState("");
+  const [aiSearchTotal,   setAiSearchTotal]  = useState(0);
+  const [aiSearchBusy,    setAiSearchBusy]   = useState(false);
+
+  // AI Budget suggestions
+  const [customBudgets,    setCustomBudgets]   = useState<Record<string,number>>({});
+  const [budgetSuggestion, setBudgetSuggestion]= useState<{budgets:Record<string,number>;note:string;source:string}|null>(null);
+  const [loadingBudgets,   setLoadingBudgets]  = useState(false);
+  const [budgetApplied,    setBudgetApplied]   = useState(false);
+
+  // Monthly report
+  interface ReportSection { heading: string; body: string; }
+  interface ReportData {
+    headline: string;
+    sections: ReportSection[];
+    actions:  string[];
+  }
+  const [reportOpen,    setReportOpen]    = useState(false);
+  const [report,        setReport]        = useState<{report:ReportData;monthLabel:string;total:number;count:number;momPct:number}|null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+
   // Upload tab state
   type UploadStage = "idle"|"analyzing"|"review"|"saving"|"success"|"error";
   interface EditableExpense {
@@ -207,6 +235,7 @@ export default function Dashboard() {
     setUploadStage("idle"); setUploadFile(null); setUploadPreview(null);
     setUploadReceiptUrl(null); setEditedExpense(null); setUploadError(""); setUploadFileName("");
     setUploadDuplicate(null); setUploadMetadata(null); setUploadFileHash(""); setShowMetadata(false);
+    setUploadAnomaly(null);
   };
 
   const handleUploadFile = (file: File) => {
@@ -270,6 +299,8 @@ export default function Dashboard() {
       });
       const json = await res.json();
       if (!res.ok) { setUploadError(json.error || "Save failed."); setUploadStage("error"); return; }
+      // Capture anomaly flag from the save response
+      setUploadAnomaly(json.anomaly?.level ? json.anomaly : null);
       // Switch to the month that matches the expense_date so it's immediately visible
       const expenseMonth = editedExpense.date.slice(0, 7); // YYYY-MM
       selMonthRef.current = expenseMonth;
@@ -307,8 +338,66 @@ export default function Dashboard() {
     fetch("/api/users")
       .then(r => r.json())
       .then(d => setUsers(d.users || []))
-      .catch(() => {}); // non-fatal
+      .catch(() => {});
   };
+
+  // ── AI Natural-Language Search ─────────────────────────────────────────
+  const runAISearch = async (q: string) => {
+    if (!q.trim()) { setAiSearchActive(false); setAiSearchResults([]); return; }
+    setAiSearchBusy(true); setAiSearchActive(true);
+    const uid = selectedUserIdRef.current;
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}${uid ? `&userId=${uid}` : ""}`).catch(()=>null);
+    if (res?.ok) {
+      const d = await res.json();
+      setAiSearchResults(d.results || []);
+      setAiSearchDesc(d.description || q);
+      setAiSearchTotal(d.total || 0);
+    }
+    setAiSearchBusy(false);
+  };
+
+  const clearSearch = () => { setAiSearchQ(""); setAiSearchActive(false); setAiSearchResults([]); setAiSearchDesc(""); };
+
+  // ── AI Budget Suggestions ──────────────────────────────────────────────
+  const fetchBudgetSuggestions = async () => {
+    setLoadingBudgets(true);
+    const uid = selectedUserIdRef.current;
+    const res = await fetch(`/api/budgets/suggest${uid ? `?userId=${uid}` : ""}`).catch(()=>null);
+    if (res?.ok) {
+      const d = await res.json();
+      setBudgetSuggestion({ budgets: d.budgets, note: d.note, source: d.source });
+    }
+    setLoadingBudgets(false);
+  };
+
+  const applyBudgets = (budgets: Record<string,number>) => {
+    setCustomBudgets(budgets);
+    setBudgetApplied(true);
+    localStorage.setItem("emsi_budgets", JSON.stringify(budgets));
+    setBudgetSuggestion(null);
+    showToast("AI budgets applied! ✅", "success");
+  };
+
+  // ── Monthly Report ─────────────────────────────────────────────────────
+  const generateReport = async () => {
+    setReportLoading(true); setReportOpen(true);
+    const uid = selectedUserIdRef.current;
+    const res = await fetch(`/api/report?month=${selMonthRef.current}${uid ? `&userId=${uid}` : ""}`).catch(()=>null);
+    if (res?.ok) {
+      const d = await res.json();
+      setReport(d);
+    } else {
+      setReportOpen(false);
+      showToast("Couldn't generate report. Try again.", "error");
+    }
+    setReportLoading(false);
+  };
+
+  // Load custom budgets from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("emsi_budgets");
+    if (saved) { try { setCustomBudgets(JSON.parse(saved)); setBudgetApplied(true); } catch {} }
+  }, []);
 
   // ── Month navigation ───────────────────────────────────────────────────
   const changeMonth = (dir: -1|1) => {
@@ -394,6 +483,26 @@ export default function Dashboard() {
     {name:"Spend Diversity",  value:data.scoreBreakdown.diversity,       fill:"#10b981"},
     {name:"Spend Control",    value:data.scoreBreakdown.spendControl,    fill:"#f59e0b"},
   ];
+
+  // Budget tracker — use custom (AI-suggested) budgets when applied
+  const activeBudgetTracker = Object.keys(customBudgets).length > 0
+    ? data.categoryChart.map(c => {
+        const budget = customBudgets[c.name] || 3000;
+        const pct    = Math.min(Math.round((c.value / budget) * 100), 150);
+        return { category: c.name, spent: c.value, budget, pct, over: c.value > budget };
+      }).sort((a, b) => b.pct - a.pct)
+    : data.budgetTracker;
+
+  // Behavioral patterns — derived from existing heatmap data
+  const dowMap: Record<string,number> = {};
+  data.heatmap.forEach(h => { dowMap[h.day] = h.amount; });
+  const weekendAmt  = (dowMap["Sat"] || 0) + (dowMap["Sun"] || 0);
+  const weekdayAmt  = (dowMap["Mon"]||0)+(dowMap["Tue"]||0)+(dowMap["Wed"]||0)+(dowMap["Thu"]||0)+(dowMap["Fri"]||0);
+  const weekdayAvg  = weekdayAmt / 5;
+  const weekendAvg  = weekendAmt / 2;
+  const weekendMult = weekdayAvg > 0 ? weekendAvg / weekdayAvg : 1;
+  const peakDay     = data.heatmap.length ? data.heatmap.reduce((mx, h) => h.amount > mx.amount ? h : mx) : null;
+  const quietDay    = data.heatmap.length ? data.heatmap.filter(h=>h.amount>0).reduce((mn, h) => h.amount < mn.amount ? h : mn, data.heatmap.filter(h=>h.amount>0)[0]) : null;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -675,26 +784,69 @@ export default function Dashboard() {
                       <Clock size={15} className="text-indigo-500"/>
                       <h3 className="font-semibold text-gray-900">Recent Transactions</h3>
                     </div>
-                    <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">{data.count} total</span>
+                    <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">
+                      {aiSearchActive ? `${aiSearchResults.length} results` : `${data.count} total`}
+                    </span>
                   </div>
-                  {/* Category filter chips */}
-                  <div className="flex gap-1.5 flex-wrap">
-                    {recentCategories.map(cat => (
-                      <button key={cat} onClick={()=>setCatFilter(cat)}
-                        className={`text-xs px-2.5 py-1 rounded-full font-medium transition-all ${
-                          catFilter===cat
-                            ? "bg-indigo-600 text-white shadow-sm"
-                            : "bg-gray-100 text-gray-500 hover:bg-indigo-50 hover:text-indigo-600"
-                        }`}>
-                        {cat==="All" ? "All" : `${CAT_EMOJI[cat]||"📦"} ${cat}`}
+                  {/* AI Search bar */}
+                  <div className="relative mb-3">
+                    <Sparkles size={13} className="absolute left-3 top-2.5 text-indigo-400"/>
+                    <input
+                      value={aiSearchQ}
+                      onChange={e=>setAiSearchQ(e.target.value)}
+                      onKeyDown={e=>{ if(e.key==="Enter") runAISearch(aiSearchQ); if(e.key==="Escape") clearSearch(); }}
+                      placeholder='AI search — "Zomato last month" or "food over ₹500"'
+                      className="w-full bg-indigo-50/60 border border-indigo-100 rounded-xl pl-8 pr-16 py-2 text-xs text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-indigo-300 focus:ring-1 focus:ring-indigo-100 transition-all"
+                    />
+                    <div className="absolute right-2 top-1.5 flex items-center gap-1">
+                      {aiSearchActive && (
+                        <button onClick={clearSearch} className="text-[10px] text-gray-400 hover:text-gray-600 px-1.5 py-0.5 rounded-md hover:bg-gray-100 transition-colors">
+                          Clear
+                        </button>
+                      )}
+                      <button
+                        onClick={()=>runAISearch(aiSearchQ)}
+                        disabled={aiSearchBusy || !aiSearchQ.trim()}
+                        className="text-xs bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white px-2.5 py-1 rounded-lg transition-colors font-medium">
+                        {aiSearchBusy ? "…" : "Search"}
                       </button>
-                    ))}
+                    </div>
                   </div>
+                  {/* AI search result summary */}
+                  {aiSearchActive && (
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="text-xs text-indigo-600 font-medium bg-indigo-50 px-2.5 py-1 rounded-full">
+                        {aiSearchDesc} · ₹{aiSearchTotal.toLocaleString("en-IN")} total
+                      </span>
+                    </div>
+                  )}
+                  {/* Category filter chips — hidden during search */}
+                  {!aiSearchActive && (
+                    <div className="flex gap-1.5 flex-wrap">
+                      {recentCategories.map(cat => (
+                        <button key={cat} onClick={()=>setCatFilter(cat)}
+                          className={`text-xs px-2.5 py-1 rounded-full font-medium transition-all ${
+                            catFilter===cat
+                              ? "bg-indigo-600 text-white shadow-sm"
+                              : "bg-gray-100 text-gray-500 hover:bg-indigo-50 hover:text-indigo-600"
+                          }`}>
+                          {cat==="All" ? "All" : `${CAT_EMOJI[cat]||"📦"} ${cat}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="divide-y divide-gray-50 max-h-[280px] overflow-y-auto">
-                  {filteredRecent.length === 0 ? (
+                <div className="divide-y divide-gray-50 max-h-[320px] overflow-y-auto">
+                  {aiSearchBusy ? (
+                    <div className="py-8 text-center space-y-2">
+                      <RefreshCw size={18} className="text-indigo-400 animate-spin mx-auto"/>
+                      <p className="text-xs text-gray-400">AI is searching…</p>
+                    </div>
+                  ) : aiSearchActive && aiSearchResults.length === 0 ? (
+                    <div className="py-8 text-center text-gray-400 text-sm">No transactions matched "{aiSearchQ}"</div>
+                  ) : (aiSearchActive ? aiSearchResults : filteredRecent).length === 0 ? (
                     <div className="py-8 text-center text-gray-400 text-sm">No {catFilter} transactions this month</div>
-                  ) : filteredRecent.map(t=>(
+                  ) : (aiSearchActive ? aiSearchResults : filteredRecent).map(t=>(
                     <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
                       <div className="flex items-center gap-3">
                         {/* Category emoji icon */}
@@ -828,12 +980,68 @@ export default function Dashboard() {
         {/* ══════════════════ BUDGET TAB ════════════════════════════════ */}
         {tab==="Budget" && (
           <div className="space-y-5">
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3">
-              <Target size={18} className="text-amber-600 flex-shrink-0"/>
-              <p className="text-sm text-amber-800">Budgets are AI-suggested based on healthy spending ratios. You'll be able to customize them soon.</p>
+            {/* Budget header with AI suggest button */}
+            <div className="flex items-center justify-between">
+              <div>
+                {budgetApplied
+                  ? <span className="text-xs bg-indigo-100 text-indigo-700 font-semibold px-3 py-1.5 rounded-full flex items-center gap-1.5 w-fit"><Sparkles size={11}/> AI Budgets Active</span>
+                  : <p className="text-xs text-gray-400">Smart budgets based on category health ratios.</p>
+                }
+              </div>
+              <button
+                onClick={fetchBudgetSuggestions}
+                disabled={loadingBudgets}
+                className="flex items-center gap-2 text-sm bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
+                {loadingBudgets ? <RefreshCw size={13} className="animate-spin"/> : <Sparkles size={13}/>}
+                {loadingBudgets ? "Analysing…" : "✨ AI Suggest Budgets"}
+              </button>
             </div>
+
+            {/* Budget suggestion preview */}
+            {budgetSuggestion && (
+              <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-indigo-900 text-sm">AI Budget Recommendations</p>
+                    <p className="text-xs text-indigo-600 mt-0.5">{budgetSuggestion.note}</p>
+                  </div>
+                  <button onClick={()=>setBudgetSuggestion(null)} className="text-indigo-400 hover:text-indigo-600"><X size={16}/></button>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                  {Object.entries(budgetSuggestion.budgets).map(([cat, suggested]) => {
+                    const current = (customBudgets[cat] || (data.budgetTracker.find(b=>b.category===cat)?.budget) || 3000);
+                    const diff = suggested - current;
+                    return (
+                      <div key={cat} className="bg-white rounded-xl px-3 py-2.5 border border-indigo-100">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-sm">{CAT_EMOJI[cat]||"📦"}</span>
+                          <span className="text-xs font-medium text-gray-700 truncate">{cat}</span>
+                        </div>
+                        <p className="text-sm font-bold text-indigo-700">₹{suggested.toLocaleString("en-IN")}</p>
+                        <p className={`text-[10px] font-medium ${diff > 0 ? "text-green-600" : diff < 0 ? "text-red-500" : "text-gray-400"}`}>
+                          {diff > 0 ? `+₹${diff.toLocaleString("en-IN")}` : diff < 0 ? `-₹${Math.abs(diff).toLocaleString("en-IN")}` : "no change"}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>applyBudgets(budgetSuggestion.budgets)}
+                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2">
+                    <CheckCircle size={14}/> Apply AI Budgets
+                  </button>
+                  {budgetApplied && (
+                    <button onClick={()=>{ setCustomBudgets({}); setBudgetApplied(false); localStorage.removeItem("emsi_budgets"); setBudgetSuggestion(null); showToast("Reverted to default budgets","info"); }}
+                      className="px-4 py-2.5 border border-gray-200 text-gray-500 text-sm rounded-xl hover:bg-gray-50 transition-colors">
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {data.budgetTracker.map((b,i)=>(
+              {activeBudgetTracker.map((b,i)=>(
                 <div key={b.category} className={`bg-white rounded-2xl p-5 border shadow-sm ${b.over?"border-red-200":"border-gray-100"}`}>
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
@@ -866,6 +1074,7 @@ export default function Dashboard() {
           </div>
         )}
 
+
         {/* ══════════════════ INTELLIGENCE TAB ═════════════════════════ */}
         {tab==="Intelligence" && (
           <div className="space-y-5">
@@ -878,9 +1087,15 @@ export default function Dashboard() {
                   <h3 className="font-semibold text-white text-lg">AI Financial Intelligence</h3>
                   <p className="text-indigo-400 text-sm">Powered by GPT-4o mini · Analysing your real spending data</p>
                 </div>
-                <button onClick={loadInsights} className="ml-auto text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors">
-                  <RefreshCw size={12}/> Regenerate
-                </button>
+                <div className="ml-auto flex items-center gap-2">
+                  <button onClick={generateReport}
+                    className="text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors">
+                    <Receipt size={12}/> Monthly Report
+                  </button>
+                  <button onClick={loadInsights} className="text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors">
+                    <RefreshCw size={12}/> Regenerate
+                  </button>
+                </div>
               </div>
               {iLoading ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -918,13 +1133,53 @@ export default function Dashboard() {
               )}
             </div>
 
+            {/* Behavioral Patterns */}
+            {data.count > 0 && (
+              <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm">
+                <SectionHeader icon={Zap} title="Spending Patterns" sub="Behavioural analysis from your data"/>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Weekend vs weekday */}
+                  <div className={`rounded-xl p-4 border ${weekendMult > 1.5 ? "bg-orange-50 border-orange-100" : "bg-green-50 border-green-100"}`}>
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Weekend vs Weekday</p>
+                    <p className={`text-2xl font-bold ${weekendMult > 1.5 ? "text-orange-700" : "text-green-700"}`}>
+                      {weekendMult > 1 ? `${weekendMult.toFixed(1)}×` : `${(1/weekendMult).toFixed(1)}× less`}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {weekendMult > 1.5
+                        ? `You spend ${weekendMult.toFixed(1)}× more per day on weekends — ₹${Math.round(weekendAvg).toLocaleString("en-IN")} vs ₹${Math.round(weekdayAvg).toLocaleString("en-IN")} on weekdays`
+                        : weekendMult < 0.8
+                        ? `Weekdays are your bigger spend days — ₹${Math.round(weekdayAvg).toLocaleString("en-IN")}/day vs ₹${Math.round(weekendAvg).toLocaleString("en-IN")}/day weekends`
+                        : `Consistent daily spend — ₹${Math.round(weekdayAvg).toLocaleString("en-IN")}/weekday vs ₹${Math.round(weekendAvg).toLocaleString("en-IN")}/weekend`
+                      }
+                    </p>
+                  </div>
+                  {/* Peak day */}
+                  <div className="rounded-xl p-4 border bg-indigo-50 border-indigo-100">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Peak Day</p>
+                    <p className="text-2xl font-bold text-indigo-700">{peakDay?.day || "—"}</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {peakDay ? `₹${peakDay.amount.toLocaleString("en-IN")} spent on ${peakDay.day}s this month — your highest-spend day` : "Not enough data"}
+                    </p>
+                  </div>
+                  {/* Quietest day */}
+                  <div className="rounded-xl p-4 border bg-emerald-50 border-emerald-100">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Quietest Day</p>
+                    <p className="text-2xl font-bold text-emerald-700">{quietDay?.day || "—"}</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {quietDay ? `₹${quietDay.amount.toLocaleString("en-IN")} — you spend least on ${quietDay.day}s. Schedule big purchases on low-spend days.` : "Not enough data"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Key financial metrics */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               {[
                 {label:"Projected Month End", value:`₹${data.projectedEnd.toLocaleString("en-IN")}`, icon:TrendingUp, color:"bg-violet-500"},
                 {label:"Largest Expense",     value:`₹${data.maxExpense.toLocaleString("en-IN")}`,   icon:AlertTriangle, color:"bg-red-500"},
                 {label:"Avg Transaction",     value:`₹${data.avgExpense.toLocaleString("en-IN")}`,   icon:Receipt, color:"bg-amber-500"},
-                {label:"Over-Budget Items",   value:`${data.budgetTracker.filter(b=>b.over).length}`, icon:Target, color:"bg-orange-500"},
+                {label:"Over-Budget Items",   value:`${activeBudgetTracker.filter(b=>b.over).length}`, icon:Target, color:"bg-orange-500"},
               ].map(m=>(
                 <div key={m.label} className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
                   <div className={`w-9 h-9 ${m.color} rounded-xl flex items-center justify-center mb-3`}>
@@ -1306,6 +1561,26 @@ export default function Dashboard() {
                   <p className="font-bold text-gray-900 text-xl mb-1">Saved successfully!</p>
                   <p className="text-gray-400 text-sm">This expense is now in your dashboard</p>
                 </div>
+
+                {/* Anomaly detection banner */}
+                {uploadAnomaly?.level && (
+                  <div className={`mx-6 mt-5 flex items-start gap-3 rounded-xl px-4 py-3 border ${
+                    uploadAnomaly.level === "high"
+                      ? "bg-red-50 border-red-200"
+                      : "bg-amber-50 border-amber-200"
+                  }`}>
+                    <AlertTriangle size={15} className={`mt-0.5 flex-shrink-0 ${uploadAnomaly.level === "high" ? "text-red-500" : "text-amber-500"}`}/>
+                    <div>
+                      <p className={`text-xs font-bold ${uploadAnomaly.level === "high" ? "text-red-800" : "text-amber-800"}`}>
+                        {uploadAnomaly.level === "high" ? "⚠️ Unusual spend detected" : "📌 Heads up"}
+                      </p>
+                      <p className={`text-xs mt-0.5 ${uploadAnomaly.level === "high" ? "text-red-700" : "text-amber-700"}`}>
+                        {uploadAnomaly.message}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="mx-6 my-5 p-5 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -1466,6 +1741,98 @@ export default function Dashboard() {
                 Save
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Monthly Report Modal ─────────────────────────────────────── */}
+      {reportOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={()=>{ if(!reportLoading) setReportOpen(false); }}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden" onClick={e=>e.stopPropagation()}>
+            {/* Header */}
+            <div className="bg-gradient-to-r from-indigo-600 to-violet-600 px-6 py-5 flex-shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center">
+                    <Receipt size={17} className="text-white"/>
+                  </div>
+                  <div>
+                    <p className="text-white font-bold">{report?.monthLabel || monthLabel} — Financial Report</p>
+                    {report && <p className="text-indigo-200 text-xs">₹{report.total.toLocaleString("en-IN")} · {report.count} transactions · GPT-4o</p>}
+                  </div>
+                </div>
+                {!reportLoading && (
+                  <button onClick={()=>setReportOpen(false)} className="text-white/70 hover:text-white transition-colors">
+                    <X size={20}/>
+                  </button>
+                )}
+              </div>
+              {report && (
+                <p className="text-white/90 text-sm mt-3 leading-relaxed italic">"{report.report.headline}"</p>
+              )}
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+              {reportLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 space-y-4">
+                  <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center">
+                    <Brain size={26} className="text-indigo-500 animate-pulse"/>
+                  </div>
+                  <p className="font-semibold text-gray-800">Generating your report…</p>
+                  <p className="text-sm text-gray-400">GPT-4o is analysing {data?.count} transactions</p>
+                  <div className="flex gap-2">
+                    {[0,1,2,3].map(i=><div key={i} className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay:`${i*120}ms`}}/>)}
+                  </div>
+                </div>
+              ) : report ? (
+                <>
+                  {report.report.sections.map((s, i) => (
+                    <div key={i}>
+                      <h4 className="font-bold text-gray-900 text-sm mb-1.5 flex items-center gap-2">
+                        <span className="w-1.5 h-4 bg-indigo-500 rounded-full inline-block"/>
+                        {s.heading}
+                      </h4>
+                      <p className="text-sm text-gray-600 leading-relaxed pl-3.5">{s.body}</p>
+                    </div>
+                  ))}
+                  {/* Action items */}
+                  <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl p-5 border border-indigo-100">
+                    <h4 className="font-bold text-indigo-900 text-sm mb-3 flex items-center gap-2">
+                      <Target size={14} className="text-indigo-600"/> 3 Actions for Next Month
+                    </h4>
+                    <div className="space-y-2">
+                      {report.report.actions.map((a, i) => (
+                        <div key={i} className="flex items-start gap-2.5">
+                          <span className="w-5 h-5 bg-indigo-600 text-white rounded-full text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>
+                          <p className="text-sm text-gray-700">{a}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
+
+            {/* Footer actions */}
+            {!reportLoading && report && (
+              <div className="px-6 py-4 border-t border-gray-100 flex gap-2 flex-shrink-0">
+                <button
+                  onClick={()=>{
+                    const text = `${report.monthLabel} Financial Report\n\n${report.report.headline}\n\n`
+                      + report.report.sections.map(s=>`${s.heading}\n${s.body}`).join("\n\n")
+                      + `\n\nActions:\n${report.report.actions.map((a,i)=>`${i+1}. ${a}`).join("\n")}`;
+                    navigator.clipboard.writeText(text).then(()=>showToast("Copied to clipboard! ✅","success"));
+                  }}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl transition-colors text-sm font-medium">
+                  <ArrowUpRight size={14}/> Copy Report
+                </button>
+                <button onClick={()=>setReportOpen(false)}
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-sm">
+                  Close
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
