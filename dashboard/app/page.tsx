@@ -30,6 +30,20 @@ type Tab = typeof TABS[number];
 const CATEGORIES = ["Food","Transport","Shopping","Entertainment","Health","Utilities","Education","Investment","Other"] as const;
 
 // ── Types ─────────────────────────────────────────────────────────────────
+/** Rich metadata extracted from a receipt (may be null for WhatsApp-only transactions) */
+type MetaShape = {
+  payment_method?: string;
+  order_id?: string;
+  invoice_number?: string;
+  upi_ref?: string;
+  subtotal?: number;
+  discount?: number;
+  taxes?: { gst?:number; cgst?:number; sgst?:number; igst?:number; total_tax?:number };
+  line_items?: { name:string; qty:number; price:number }[];
+  merchant_phone?: string;
+  merchant_address?: string;
+};
+
 interface Summary {
   total:number; count:number; prevTotal:number; momChange:number;
   healthScore:number; dailyAvg:number; projectedEnd:number;
@@ -40,10 +54,11 @@ interface Summary {
   monthComparison:{category:string;current:number;previous:number}[];
   budgetTracker:{category:string;spent:number;budget:number;pct:number;over:boolean}[];
   topMerchants:{name:string;total:number;count:number;avg:number}[];
-  recent:{id:string;merchant:string;amount:number;category:string;description:string;created_at:string;expense_date:string|null;display_date:string;receipt_url:string|null}[];
+  recent:{id:string;merchant:string;amount:number;category:string;description:string;created_at:string;expense_date:string|null;display_date:string;receipt_url:string|null;metadata:Record<string,unknown>|null}[];
   scoreBreakdown:{budgetAdherence:number;diversity:number;spendControl:number};
 }
-interface Insight {type:string;icon:string;title:string;message:string;}
+interface UserRow  {id:string;phone:string;label:string;count:number;}
+interface Insight  {type:string;icon:string;title:string;message:string;}
 interface ChatMsg  {role:"user"|"assistant";content:string;}
 interface Toast    {id:number;type:"success"|"error"|"info";message:string;}
 
@@ -103,12 +118,18 @@ export default function Dashboard() {
   }]);
   const [input,         setInput]         = useState("");
   const [chatBusy,      setChatBusy]      = useState(false);
-  const [selMonth,      setSelMonth]      = useState(()=>new Date().toISOString().slice(0,7));
+  // Timezone-safe init: toISOString() shifts to UTC and can return the wrong month in IST
+  const [selMonth,      setSelMonth]      = useState(()=>{ const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
   const [catFilter,     setCatFilter]     = useState("All");
   const [toasts,        setToasts]        = useState<Toast[]>([]);
   const [userName,      setUserName]      = useState("");
   const [nameInput,     setNameInput]     = useState("");
   const [showNameModal,  setShowNameModal]  = useState(false);
+
+  // User picker (admin: switch between users)
+  const [users,          setUsers]          = useState<UserRow[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<string>("");
+  const selectedUserIdRef = useRef<string>("");
 
   // Upload tab state
   type UploadStage = "idle"|"analyzing"|"review"|"saving"|"success"|"error";
@@ -136,15 +157,18 @@ export default function Dashboard() {
 
   // Receipt viewer modal
   interface ReceiptView {
-    url: string; merchant: string; amount: number;
-    category: string; date: string; isPdf: boolean;
+    url: string; merchant: string; amount: number; category: string;
+    date: string; isPdf: boolean; description: string;
+    metadata: Record<string,unknown>|null;
   }
   const [receiptView, setReceiptView] = useState<ReceiptView|null>(null);
 
   const selMonthRef = useRef(selMonth);
   const chatEnd     = useRef<HTMLDivElement>(null);
 
-  const currentMonth = new Date().toISOString().slice(0,7);
+  // Timezone-safe: toISOString() returns UTC which can roll back a day in IST
+  const _n = new Date();
+  const currentMonth = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,"0")}`;
   const monthLabel   = new Date(selMonth + "-02").toLocaleString("default",{month:"long",year:"numeric"});
 
   // Generate month options from March 2026 → current
@@ -260,9 +284,12 @@ export default function Dashboard() {
   };
 
   // ── Data loaders ───────────────────────────────────────────────────────
-  const load = (month: string, initial = false) => {
+  const load = (month: string, initial = false, forUserId?: string) => {
+    // If forUserId not passed, use the ref (avoids stale closure)
+    const uid = forUserId !== undefined ? forUserId : selectedUserIdRef.current;
+    const url = `/api/summary?month=${month}${uid ? `&userId=${uid}` : ""}`;
     initial ? setFirstLoad(true) : setDataLoading(true);
-    fetch(`/api/summary?month=${month}`)
+    fetch(url)
       .then(r => r.json())
       .then(d => { setData(d); setFirstLoad(false); setDataLoading(false); })
       .catch(() => { setFirstLoad(false); setDataLoading(false); showToast("Failed to load data. Check your connection.", "error"); });
@@ -274,6 +301,13 @@ export default function Dashboard() {
       .then(r => r.json())
       .then(d => { setInsights(d.insights||[]); setILoading(false); })
       .catch(() => { setILoading(false); showToast("Couldn't load AI insights.", "error"); });
+  };
+
+  const loadUsers = () => {
+    fetch("/api/users")
+      .then(r => r.json())
+      .then(d => setUsers(d.users || []))
+      .catch(() => {}); // non-fatal
   };
 
   // ── Month navigation ───────────────────────────────────────────────────
@@ -297,8 +331,15 @@ export default function Dashboard() {
     load(nm);
   };
 
+  const handleUserSelect = (userId: string) => {
+    selectedUserIdRef.current = userId;
+    setSelectedUserId(userId);
+    setCatFilter("All");
+    load(selMonthRef.current, false, userId);
+  };
+
   // ── Effects ────────────────────────────────────────────────────────────
-  useEffect(() => { load(selMonth, true); loadInsights(); }, []);
+  useEffect(() => { load(selMonth, true); loadInsights(); loadUsers(); }, []);
   useEffect(() => { chatEnd.current?.scrollIntoView({behavior:"smooth"}); }, [history]);
   useEffect(() => {
     const saved = localStorage.getItem("emsi_username");
@@ -391,6 +432,22 @@ export default function Dashboard() {
               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
               <RefreshCw size={16}/>
             </button>
+            {/* Admin: switch between users */}
+            {users.length > 0 && (
+              <div className="relative hidden sm:flex items-center">
+                <select
+                  value={selectedUserId}
+                  onChange={e=>handleUserSelect(e.target.value)}
+                  className="appearance-none text-xs bg-gray-100 hover:bg-indigo-50 border border-gray-200 hover:border-indigo-300 rounded-xl pl-3 pr-7 py-1.5 text-gray-600 cursor-pointer focus:outline-none focus:border-indigo-400 transition-colors font-medium"
+                >
+                  <option value="">👥 All users</option>
+                  {users.map(u=>(
+                    <option key={u.id} value={u.id}>{u.label} ({u.count})</option>
+                  ))}
+                </select>
+                <ChevronDown size={11} className="absolute right-2.5 text-gray-400 pointer-events-none"/>
+              </div>
+            )}
             <button onClick={()=>{ resetUpload(); setTab("Upload"); }}
               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
               <Upload size={15}/><span className="hidden sm:inline">Upload</span>
@@ -638,10 +695,20 @@ export default function Dashboard() {
                   {filteredRecent.length === 0 ? (
                     <div className="py-8 text-center text-gray-400 text-sm">No {catFilter} transactions this month</div>
                   ) : filteredRecent.map(t=>(
-                    <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors group">
+                    <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
                       <div className="flex items-center gap-3">
-                        {/* Receipt thumbnail — click to open lightbox */}
-                        {t.receipt_url ? (
+                        {/* Category emoji icon */}
+                        <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-base flex-shrink-0">
+                          {CAT_EMOJI[t.category]||"📦"}
+                        </div>
+                        <div>
+                          <p className="font-medium text-gray-900 text-sm">{t.merchant||"Unknown"}</p>
+                          <p className="text-xs text-gray-400">{t.category} · {new Date(t.display_date + "T12:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        {/* View receipt button — only when receipt exists */}
+                        {t.receipt_url && (
                           <button
                             onClick={()=>setReceiptView({
                               url: t.receipt_url!,
@@ -650,24 +717,15 @@ export default function Dashboard() {
                               category: t.category,
                               date: new Date(t.display_date + "T12:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}),
                               isPdf: t.receipt_url!.toLowerCase().includes(".pdf"),
+                              description: t.description || "",
+                              metadata: t.metadata ?? null,
                             })}
-                            title="View receipt"
-                            className="w-9 h-9 rounded-xl overflow-hidden border border-gray-100 flex-shrink-0 cursor-zoom-in hover:ring-2 hover:ring-indigo-300 transition-all relative group/thumb">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={t.receipt_url} alt="receipt" className="w-full h-full object-cover"/>
-                            <div className="absolute inset-0 bg-indigo-600/0 group-hover/thumb:bg-indigo-600/20 transition-colors flex items-center justify-center">
-                              <Receipt size={12} className="text-white opacity-0 group-hover/thumb:opacity-100 transition-opacity drop-shadow"/>
-                            </div>
+                            className="text-xs text-indigo-600 border border-indigo-200 bg-white hover:bg-indigo-50 px-2.5 py-1 rounded-lg font-medium transition-colors flex items-center gap-1 flex-shrink-0">
+                            <Receipt size={10}/> View
                           </button>
-                        ) : (
-                          <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-base flex-shrink-0">{CAT_EMOJI[t.category]||"📦"}</div>
                         )}
-                        <div>
-                          <p className="font-medium text-gray-900 text-sm">{t.merchant||"Unknown"}</p>
-                          <p className="text-xs text-gray-400">{t.category} · {new Date(t.display_date + "T12:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
-                        </div>
+                        <p className="font-bold text-gray-900 text-sm">₹{Number(t.amount).toLocaleString("en-IN")}</p>
                       </div>
-                      <p className="font-bold text-gray-900">₹{Number(t.amount).toLocaleString("en-IN")}</p>
                     </div>
                   ))}
                 </div>
@@ -1107,13 +1165,6 @@ export default function Dashboard() {
 
                     {/* ── Extracted metadata panel ──────────────────────── */}
                     {uploadMetadata && (() => {
-                      type MetaShape = {
-                        payment_method?: string; order_id?: string; invoice_number?: string;
-                        upi_ref?: string; subtotal?: number; discount?: number;
-                        taxes?: {gst?:number;cgst?:number;sgst?:number;igst?:number;total_tax?:number};
-                        line_items?: {name:string;qty:number;price:number}[];
-                        merchant_phone?: string; merchant_address?: string;
-                      };
                       const meta = uploadMetadata as MetaShape;
                       const taxes = meta.taxes;
                       const lineItems = meta.line_items;
@@ -1450,24 +1501,125 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Receipt image or PDF placeholder */}
-            <div className="flex-1 overflow-y-auto bg-slate-100 flex items-center justify-center p-4 min-h-[300px]">
-              {receiptView.isPdf ? (
-                <div className="text-center space-y-3">
-                  <div className="w-20 h-24 bg-orange-50 rounded-2xl border-2 border-orange-100 flex items-center justify-center mx-auto">
-                    <FilePlus size={36} className="text-orange-400"/>
+            {/* Scrollable body: receipt image + metadata */}
+            <div className="flex-1 overflow-y-auto">
+              {/* Receipt image / PDF placeholder */}
+              <div className="bg-slate-100 flex items-center justify-center p-4 min-h-[220px]">
+                {receiptView.isPdf ? (
+                  <div className="text-center space-y-3">
+                    <div className="w-20 h-24 bg-orange-50 rounded-2xl border-2 border-orange-100 flex items-center justify-center mx-auto">
+                      <FilePlus size={36} className="text-orange-400"/>
+                    </div>
+                    <p className="text-sm font-medium text-gray-600">PDF Receipt</p>
+                    <p className="text-xs text-gray-400">Open to view full document</p>
                   </div>
-                  <p className="text-sm font-medium text-gray-600">PDF Receipt</p>
-                  <p className="text-xs text-gray-400">Open to view full document</p>
-                </div>
-              ) : (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={receiptView.url}
-                  alt={`Receipt — ${receiptView.merchant}`}
-                  className="max-w-full max-h-[60vh] rounded-xl shadow-md object-contain"
-                />
-              )}
+                ) : (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={receiptView.url}
+                    alt={`Receipt — ${receiptView.merchant}`}
+                    className="max-w-full max-h-[45vh] rounded-xl shadow-md object-contain"
+                  />
+                )}
+              </div>
+
+              {/* ── Metadata panel ─────────────────────────────────────── */}
+              {(() => {
+                const meta = receiptView.metadata as MetaShape | null;
+                const taxes    = meta?.taxes;
+                const items    = meta?.line_items;
+                const hasAny   = meta && (
+                  meta.payment_method || meta.upi_ref || meta.order_id ||
+                  meta.invoice_number || (items && items.length > 0) ||
+                  (taxes && (taxes.total_tax ?? 0) > 0) || meta.discount ||
+                  meta.merchant_address
+                );
+                if (!hasAny) {
+                  return receiptView.description ? (
+                    <div className="px-5 py-4 border-t border-gray-50">
+                      <p className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1">Description</p>
+                      <p className="text-sm text-gray-700">{receiptView.description}</p>
+                    </div>
+                  ) : null;
+                }
+                return (
+                  <div className="px-5 py-4 border-t border-gray-100 space-y-4">
+                    {/* Description */}
+                    {receiptView.description && (
+                      <p className="text-sm text-gray-600 italic">"{receiptView.description}"</p>
+                    )}
+                    {/* Chips row: payment method, UPI, order ID, invoice */}
+                    <div className="flex flex-wrap gap-2">
+                      {meta?.payment_method && meta.payment_method !== "Unknown" && (
+                        <span className="text-xs bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-1 rounded-full font-medium">
+                          💳 {String(meta.payment_method)}
+                        </span>
+                      )}
+                      {meta?.upi_ref && (
+                        <span className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2.5 py-1 rounded-full font-mono">
+                          UPI {String(meta.upi_ref).slice(0,16)}{String(meta.upi_ref).length>16?"…":""}
+                        </span>
+                      )}
+                      {meta?.order_id && (
+                        <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1 rounded-full">
+                          # {String(meta.order_id).slice(0,20)}{String(meta.order_id).length>20?"…":""}
+                        </span>
+                      )}
+                      {meta?.invoice_number && (
+                        <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1 rounded-full">
+                          INV {String(meta.invoice_number)}
+                        </span>
+                      )}
+                    </div>
+                    {/* Merchant address */}
+                    {meta?.merchant_address && (
+                      <p className="text-xs text-gray-400">📍 {String(meta.merchant_address)}</p>
+                    )}
+                    {/* Line items table */}
+                    {items && items.length > 0 && (
+                      <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-100">
+                        <div className="grid grid-cols-[1fr_auto_auto] text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-3 py-2 border-b border-gray-100">
+                          <span>Item</span><span className="pr-4 text-right">Qty</span><span className="text-right">Price</span>
+                        </div>
+                        {items.map((item, i) => (
+                          <div key={i} className="grid grid-cols-[1fr_auto_auto] text-xs px-3 py-2 border-b border-gray-50 last:border-0">
+                            <span className="text-gray-700 truncate pr-2">{item.name}</span>
+                            <span className="text-gray-400 pr-4 text-right">{item.qty}</span>
+                            <span className="font-medium text-gray-900 text-right">₹{Number(item.price).toLocaleString("en-IN")}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Tax + discount summary */}
+                    {(meta?.subtotal || (meta?.discount ?? 0) > 0 || (taxes && (taxes.total_tax ?? 0) > 0)) && (
+                      <div className="space-y-1 text-xs border-t border-gray-100 pt-3">
+                        {meta?.subtotal && (
+                          <div className="flex justify-between text-gray-500">
+                            <span>Subtotal</span>
+                            <span>₹{Number(meta.subtotal).toLocaleString("en-IN")}</span>
+                          </div>
+                        )}
+                        {(meta?.discount ?? 0) > 0 && (
+                          <div className="flex justify-between text-green-600 font-medium">
+                            <span>Discount</span>
+                            <span>−₹{Number(meta!.discount).toLocaleString("en-IN")}</span>
+                          </div>
+                        )}
+                        {taxes?.cgst && taxes?.sgst ? (
+                          <>
+                            <div className="flex justify-between text-gray-400"><span>CGST</span><span>₹{Number(taxes.cgst).toLocaleString("en-IN")}</span></div>
+                            <div className="flex justify-between text-gray-400"><span>SGST</span><span>₹{Number(taxes.sgst).toLocaleString("en-IN")}</span></div>
+                          </>
+                        ) : taxes?.gst ? (
+                          <div className="flex justify-between text-gray-400"><span>GST</span><span>₹{Number(taxes.gst).toLocaleString("en-IN")}</span></div>
+                        ) : taxes?.total_tax ? (
+                          <div className="flex justify-between text-gray-400"><span>Tax</span><span>₹{Number(taxes.total_tax).toLocaleString("en-IN")}</span></div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Actions */}
