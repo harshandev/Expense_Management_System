@@ -100,12 +100,55 @@ export async function POST(req: NextRequest) {
           .select()
           .single();
         if (e2) throw e2;
-        return NextResponse.json({ transaction: t2, migrationPending: true });
+        return NextResponse.json({ transaction: t2, migrationPending: true, anomaly: null });
       }
       throw txErr;
     }
 
-    return NextResponse.json({ transaction });
+    // ── Anomaly Detection ────────────────────────────────────────────────
+    // Compare this transaction against the user's last 90 days of history
+    let anomaly: { level: "high" | "medium" | null; message: string } = { level: null, message: "" };
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - 90);
+
+      const { data: history } = await supabase
+        .from("transactions")
+        .select("amount, category, merchant")
+        .eq("user_id", userId)
+        .gte("created_at", since.toISOString())
+        .neq("id", transaction.id);
+
+      if (history && history.length >= 5) {
+        const catTxns   = history.filter(t => t.category === (category || "Other"));
+        const catAvg    = catTxns.length > 0
+          ? catTxns.reduce((s, t) => s + Number(t.amount), 0) / catTxns.length
+          : null;
+        const txAmt     = Number(amount);
+        const isNew     = !history.some(t => (t.merchant || "").toLowerCase() === merchant.trim().toLowerCase());
+
+        if (catAvg && txAmt > catAvg * 3) {
+          anomaly = {
+            level: "high",
+            message: `₹${txAmt.toLocaleString("en-IN")} is ${Math.round(txAmt / catAvg)}× your usual ${category} spend (avg ₹${Math.round(catAvg).toLocaleString("en-IN")})`,
+          };
+        } else if (catAvg && txAmt > catAvg * 1.8) {
+          anomaly = {
+            level: "medium",
+            message: `₹${txAmt.toLocaleString("en-IN")} is ${Math.round((txAmt / catAvg - 1) * 100)}% above your avg ${category} spend (₹${Math.round(catAvg).toLocaleString("en-IN")})`,
+          };
+        } else if (isNew) {
+          anomaly = {
+            level: "medium",
+            message: `First time spending at ${merchant.trim()} in your history`,
+          };
+        }
+      }
+    } catch {
+      // non-fatal — anomaly detection never blocks a save
+    }
+
+    return NextResponse.json({ transaction, anomaly });
 
   } catch (err) {
     console.error("Upload/save error:", err);
