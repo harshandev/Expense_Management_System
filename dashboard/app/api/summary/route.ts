@@ -29,12 +29,12 @@ export async function GET(req: Request) {
 
   const [{ data: curr }, { data: prev }] = await Promise.all([
     supabase.from("transactions").select("*")
-      .gte("created_at", `${yearMonth}-01`)
-      .lt("created_at",  `${nextMonth}-01`)
-      .order("created_at", { ascending: false }),
+      .gte("expense_date", `${yearMonth}-01`)
+      .lt("expense_date",  `${nextMonth}-01`)
+      .order("created_at", { ascending: false }),   // most-recently-logged first
     supabase.from("transactions").select("*")
-      .gte("created_at", `${prevStart}-01`)
-      .lt("created_at",  `${yearMonth}-01`),
+      .gte("expense_date", `${prevStart}-01`)
+      .lt("expense_date",  `${yearMonth}-01`),
   ]);
 
   const transactions = curr || [];
@@ -68,20 +68,20 @@ export async function GET(req: Request) {
     .sort((a, b) => b.total - a.total)
     .slice(0, 6);
 
-  // Daily trend
+  // Daily trend — group by expense_date so the chart reflects when money was spent
   const byDay: Record<string, number> = {};
   for (const t of transactions) {
-    const d = t.created_at.slice(0, 10);
+    const d = (t.expense_date || t.created_at).slice(0, 10);
     byDay[d] = (byDay[d] || 0) + Number(t.amount);
   }
   const trend = Object.entries(byDay)
     .map(([date, amount]) => ({ date, amount: Math.round(amount) }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // Day of week heatmap (0=Sun...6=Sat)
+  // Day of week heatmap (0=Sun...6=Sat) — use expense_date for accuracy
   const byDow: Record<number, number> = { 0:0,1:0,2:0,3:0,4:0,5:0,6:0 };
   for (const t of transactions) {
-    const dow = new Date(t.created_at).getDay();
+    const dow = new Date((t.expense_date || t.created_at) + "T12:00:00").getDay();
     byDow[dow] = (byDow[dow] || 0) + Number(t.amount);
   }
   const dowLabels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -139,6 +139,7 @@ export async function GET(req: Request) {
     recent: transactions.slice(0, 15).map((t: any) => ({
       id: t.id, merchant: t.merchant, amount: t.amount, category: t.category,
       description: t.description, created_at: t.created_at,
+      expense_date: t.expense_date ?? null,
       receipt_url: t.receipt_url ?? null,
     })),
     month: selDate.toLocaleString("default", { month: "long", year: "numeric" }),
