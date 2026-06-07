@@ -116,6 +116,10 @@ export default function Dashboard() {
     merchant: string; amount: string; category: string;
     subcategory: string; date: string; description: string; confidence: number;
   }
+  interface UploadDuplicate {
+    id: string; merchant: string; amount: number;
+    expense_date: string; receipt_url: string | null;
+  }
   const [uploadStage,      setUploadStage]      = useState<UploadStage>("idle");
   const [uploadFile,       setUploadFile]        = useState<File|null>(null);
   const [uploadPreview,    setUploadPreview]     = useState<string|null>(null);
@@ -124,6 +128,10 @@ export default function Dashboard() {
   const [editedExpense,    setEditedExpense]     = useState<EditableExpense|null>(null);
   const [uploadError,      setUploadError]       = useState<string>("");
   const [uploadDrag,       setUploadDrag]        = useState(false);
+  const [uploadDuplicate,  setUploadDuplicate]  = useState<UploadDuplicate|null>(null);
+  const [uploadMetadata,   setUploadMetadata]   = useState<Record<string,unknown>|null>(null);
+  const [uploadFileHash,   setUploadFileHash]   = useState<string>("");
+  const [showMetadata,     setShowMetadata]     = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const selMonthRef = useRef(selMonth);
@@ -167,6 +175,7 @@ export default function Dashboard() {
   const resetUpload = () => {
     setUploadStage("idle"); setUploadFile(null); setUploadPreview(null);
     setUploadReceiptUrl(null); setEditedExpense(null); setUploadError(""); setUploadFileName("");
+    setUploadDuplicate(null); setUploadMetadata(null); setUploadFileHash(""); setShowMetadata(false);
   };
 
   const handleUploadFile = (file: File) => {
@@ -193,6 +202,9 @@ export default function Dashboard() {
       if (!res.ok) { setUploadError(json.error || "Processing failed."); setUploadStage("error"); return; }
       const e = json.expense as Record<string, unknown>;
       setUploadReceiptUrl(json.receiptUrl ?? null);
+      setUploadFileHash(json.fileHash ?? "");
+      setUploadDuplicate(json.duplicate ?? null);
+      setUploadMetadata((e.metadata as Record<string,unknown>) ?? null);
       setEditedExpense({
         merchant:    String(e.merchant    || ""),
         amount:      String(e.amount      || ""),
@@ -218,9 +230,11 @@ export default function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...editedExpense,
-          amount:     Number(editedExpense.amount),
-          receiptUrl: uploadReceiptUrl,
-          fileName:   uploadFileName,
+          amount:      Number(editedExpense.amount),
+          receiptUrl:  uploadReceiptUrl,
+          fileName:    uploadFileName,
+          metadata:    uploadMetadata,
+          receiptHash: uploadFileHash,
         }),
       });
       const json = await res.json();
@@ -941,6 +955,33 @@ export default function Dashboard() {
                   </button>
                 </div>
 
+                {/* ── Duplicate warning banner ─────────────────────── */}
+                {uploadDuplicate && (
+                  <div className="mx-6 mt-4 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                    <AlertTriangle size={16} className="text-amber-500 mt-0.5 flex-shrink-0"/>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-amber-800">Looks like you&apos;ve uploaded this receipt before</p>
+                      <p className="text-xs text-amber-600 mt-0.5">
+                        <span className="font-medium">{uploadDuplicate.merchant}</span>
+                        {" · "}₹{Number(uploadDuplicate.amount).toLocaleString("en-IN")}
+                        {" · "}{uploadDuplicate.expense_date}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {uploadDuplicate.receipt_url && (
+                        <a href={uploadDuplicate.receipt_url} target="_blank" rel="noreferrer"
+                          className="text-xs text-amber-700 underline hover:text-amber-900 whitespace-nowrap">
+                          View original
+                        </a>
+                      )}
+                      <button onClick={()=>setUploadDuplicate(null)}
+                        className="text-amber-400 hover:text-amber-600">
+                        <X size={14}/>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-5">
                   {/* Left: Receipt preview */}
                   <div className="md:col-span-2 bg-slate-50 p-6 flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-gray-100 gap-4">
@@ -1040,6 +1081,119 @@ export default function Dashboard() {
                         className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
                       />
                     </div>
+
+                    {/* ── Extracted metadata panel ──────────────────────── */}
+                    {uploadMetadata && (() => {
+                      type MetaShape = {
+                        payment_method?: string; order_id?: string; invoice_number?: string;
+                        upi_ref?: string; subtotal?: number; discount?: number;
+                        taxes?: {gst?:number;cgst?:number;sgst?:number;igst?:number;total_tax?:number};
+                        line_items?: {name:string;qty:number;price:number}[];
+                        merchant_phone?: string; merchant_address?: string;
+                      };
+                      const meta = uploadMetadata as MetaShape;
+                      const taxes = meta.taxes;
+                      const lineItems = meta.line_items;
+                      const hasAny = meta.payment_method || meta.order_id || meta.invoice_number ||
+                                     meta.upi_ref || (lineItems && lineItems.length > 0) ||
+                                     (taxes && (taxes.total_tax ?? 0) > 0) || meta.discount;
+                      if (!hasAny) return null;
+                      return (
+                        <div className="border border-gray-100 rounded-xl overflow-hidden">
+                          <button
+                            onClick={()=>setShowMetadata(p=>!p)}
+                            className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 transition-colors text-xs font-semibold text-gray-600">
+                            <span className="flex items-center gap-1.5">
+                              <Sparkles size={11} className="text-indigo-500"/>
+                              Extracted details
+                              {lineItems && lineItems.length > 0 && (
+                                <span className="bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full text-[10px]">
+                                  {lineItems.length} items
+                                </span>
+                              )}
+                            </span>
+                            <ChevronDown size={13} className={`text-gray-400 transition-transform ${showMetadata?"rotate-180":""}`}/>
+                          </button>
+                          {showMetadata && (
+                            <div className="p-4 space-y-3 bg-white">
+                              {/* Payment + IDs row */}
+                              <div className="flex flex-wrap gap-2">
+                                {meta.payment_method && meta.payment_method !== "Unknown" && (
+                                  <span className="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full font-medium border border-blue-100">
+                                    💳 {String(meta.payment_method)}
+                                  </span>
+                                )}
+                                {meta.upi_ref && (
+                                  <span className="text-xs bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full font-medium border border-purple-100 font-mono">
+                                    UPI {String(meta.upi_ref).slice(0,14)}{String(meta.upi_ref).length>14?"…":""}
+                                  </span>
+                                )}
+                                {meta.order_id && (
+                                  <span className="text-xs bg-gray-50 text-gray-600 px-2.5 py-1 rounded-full border border-gray-200">
+                                    # {String(meta.order_id).slice(0,18)}{String(meta.order_id).length>18?"…":""}
+                                  </span>
+                                )}
+                                {meta.invoice_number && (
+                                  <span className="text-xs bg-gray-50 text-gray-600 px-2.5 py-1 rounded-full border border-gray-200">
+                                    INV {String(meta.invoice_number).slice(0,14)}
+                                  </span>
+                                )}
+                              </div>
+                              {/* Line items */}
+                              {lineItems && lineItems.length > 0 && (
+                                <div className="bg-gray-50 rounded-lg overflow-hidden">
+                                  <div className="grid grid-cols-[1fr_auto_auto] text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-3 py-1.5 border-b border-gray-100">
+                                    <span>Item</span><span className="text-right pr-4">Qty</span><span className="text-right">Price</span>
+                                  </div>
+                                  {lineItems.map((item, i) => (
+                                    <div key={i} className="grid grid-cols-[1fr_auto_auto] text-xs px-3 py-1.5 border-b border-gray-50 last:border-0">
+                                      <span className="text-gray-700 truncate pr-2">{item.name}</span>
+                                      <span className="text-gray-400 text-right pr-4">{item.qty}</span>
+                                      <span className="text-gray-700 font-medium text-right">₹{Number(item.price).toLocaleString("en-IN")}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {/* Tax + Discount summary */}
+                              {(meta.subtotal || meta.discount || (taxes && (taxes.total_tax ?? 0) > 0)) && (
+                                <div className="text-xs space-y-1">
+                                  {meta.subtotal && (
+                                    <div className="flex justify-between text-gray-500">
+                                      <span>Subtotal</span>
+                                      <span>₹{Number(meta.subtotal).toLocaleString("en-IN")}</span>
+                                    </div>
+                                  )}
+                                  {(meta.discount ?? 0) > 0 && (
+                                    <div className="flex justify-between text-green-600">
+                                      <span>Discount</span>
+                                      <span>−₹{Number(meta.discount).toLocaleString("en-IN")}</span>
+                                    </div>
+                                  )}
+                                  {taxes && taxes.cgst && taxes.sgst ? (
+                                    <>
+                                      <div className="flex justify-between text-gray-400">
+                                        <span>CGST</span><span>₹{Number(taxes.cgst).toLocaleString("en-IN")}</span>
+                                      </div>
+                                      <div className="flex justify-between text-gray-400">
+                                        <span>SGST</span><span>₹{Number(taxes.sgst).toLocaleString("en-IN")}</span>
+                                      </div>
+                                    </>
+                                  ) : taxes?.gst ? (
+                                    <div className="flex justify-between text-gray-400">
+                                      <span>GST</span><span>₹{Number(taxes.gst).toLocaleString("en-IN")}</span>
+                                    </div>
+                                  ) : taxes?.total_tax ? (
+                                    <div className="flex justify-between text-gray-400">
+                                      <span>Tax</span><span>₹{Number(taxes.total_tax).toLocaleString("en-IN")}</span>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Actions */}
                     <div className="flex gap-2 pt-2">
