@@ -134,6 +134,13 @@ export default function Dashboard() {
   const [showMetadata,     setShowMetadata]     = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
 
+  // Receipt viewer modal
+  interface ReceiptView {
+    url: string; merchant: string; amount: number;
+    category: string; date: string; isPdf: boolean;
+  }
+  const [receiptView, setReceiptView] = useState<ReceiptView|null>(null);
+
   const selMonthRef = useRef(selMonth);
   const chatEnd     = useRef<HTMLDivElement>(null);
 
@@ -629,13 +636,25 @@ export default function Dashboard() {
                   ) : filteredRecent.map(t=>(
                     <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors group">
                       <div className="flex items-center gap-3">
-                        {/* Receipt thumbnail if available, otherwise category emoji */}
+                        {/* Receipt thumbnail — click to open lightbox */}
                         {t.receipt_url ? (
-                          <a href={t.receipt_url} target="_blank" rel="noreferrer"
-                            className="w-9 h-9 rounded-xl overflow-hidden border border-gray-100 flex-shrink-0 cursor-zoom-in hover:ring-2 hover:ring-indigo-300 transition-all">
+                          <button
+                            onClick={()=>setReceiptView({
+                              url: t.receipt_url!,
+                              merchant: t.merchant||"Unknown",
+                              amount: t.amount,
+                              category: t.category,
+                              date: new Date(t.created_at).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}),
+                              isPdf: t.receipt_url!.toLowerCase().includes(".pdf"),
+                            })}
+                            title="View receipt"
+                            className="w-9 h-9 rounded-xl overflow-hidden border border-gray-100 flex-shrink-0 cursor-zoom-in hover:ring-2 hover:ring-indigo-300 transition-all relative group/thumb">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={t.receipt_url} alt="receipt" className="w-full h-full object-cover"/>
-                          </a>
+                            <div className="absolute inset-0 bg-indigo-600/0 group-hover/thumb:bg-indigo-600/20 transition-colors flex items-center justify-center">
+                              <Receipt size={12} className="text-white opacity-0 group-hover/thumb:opacity-100 transition-opacity drop-shadow"/>
+                            </div>
+                          </button>
                         ) : (
                           <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-base flex-shrink-0">{CAT_EMOJI[t.category]||"📦"}</div>
                         )}
@@ -1390,6 +1409,76 @@ export default function Dashboard() {
               <button onClick={saveName} disabled={!nameInput.trim()}
                 className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-sm text-white font-semibold transition-colors">
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Receipt Lightbox Modal ────────────────────────────────────── */}
+      {receiptView && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          onClick={()=>setReceiptView(null)}>
+          <div
+            className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]"
+            onClick={e=>e.stopPropagation()}>
+
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-lg flex-shrink-0">
+                  {CAT_EMOJI[receiptView.category]||"📦"}
+                </div>
+                <div>
+                  <p className="font-bold text-gray-900 text-sm">{receiptView.merchant}</p>
+                  <p className="text-xs text-gray-400">{receiptView.category} · {receiptView.date}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-bold text-indigo-700">
+                  ₹{Number(receiptView.amount).toLocaleString("en-IN")}
+                </span>
+                <button onClick={()=>setReceiptView(null)}
+                  className="ml-2 w-8 h-8 flex items-center justify-center rounded-xl bg-gray-100 hover:bg-gray-200 transition-colors text-gray-500">
+                  <X size={15}/>
+                </button>
+              </div>
+            </div>
+
+            {/* Receipt image or PDF placeholder */}
+            <div className="flex-1 overflow-y-auto bg-slate-100 flex items-center justify-center p-4 min-h-[300px]">
+              {receiptView.isPdf ? (
+                <div className="text-center space-y-3">
+                  <div className="w-20 h-24 bg-orange-50 rounded-2xl border-2 border-orange-100 flex items-center justify-center mx-auto">
+                    <FilePlus size={36} className="text-orange-400"/>
+                  </div>
+                  <p className="text-sm font-medium text-gray-600">PDF Receipt</p>
+                  <p className="text-xs text-gray-400">Open to view full document</p>
+                </div>
+              ) : (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={receiptView.url}
+                  alt={`Receipt — ${receiptView.merchant}`}
+                  className="max-w-full max-h-[60vh] rounded-xl shadow-md object-contain"
+                />
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="px-5 py-4 border-t border-gray-100 flex gap-2">
+              <a
+                href={receiptView.url}
+                download
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl transition-colors text-sm font-medium">
+                <ArrowUpRight size={14}/> Open original
+              </a>
+              <button onClick={()=>setReceiptView(null)}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-sm">
+                Close
               </button>
             </div>
           </div>
