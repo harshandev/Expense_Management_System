@@ -107,24 +107,11 @@ export async function POST(req: NextRequest) {
       expense = JSON.parse(result.choices[0].message.content || "{}");
 
     } else if (mime === "application/pdf") {
-      // pdfjs-dist: pure JS, zero native deps — works in Vercel serverless
-      const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
-      GlobalWorkerOptions.workerSrc = "";
-
-      const pdf = await getDocument({
-        data: new Uint8Array(buffer),
-        useWorkerFetch: false,
-        isEvalSupported: false,
-        useSystemFonts: true,
-      }).promise;
-
-      let text = "";
-      for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
-        const page    = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        text += content.items.map((item) => ("str" in item ? item.str : "")).join(" ") + "\n";
-      }
-      text = text.trim();
+      // unpdf: wraps pdfjs-dist with correct serverless/edge worker setup
+      const { extractText } = await import("unpdf");
+      const { text: rawText, totalPages } = await extractText(new Uint8Array(buffer), { mergePages: true });
+      const text = rawText.trim();
+      void totalPages;
 
       if (text.length < 80) {
         return NextResponse.json({
@@ -136,7 +123,7 @@ export async function POST(req: NextRequest) {
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user",   content: `[PDF Receipt – ${pdf.numPages} page(s)]\n${text.slice(0, 6000)}` },
+          { role: "user",   content: `[PDF Receipt]\n${text.slice(0, 6000)}` },
         ],
         response_format: { type: "json_object" },
         max_tokens: 600,
