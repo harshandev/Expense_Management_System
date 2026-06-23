@@ -12,7 +12,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
-import { supabase } from "@/lib/supabase";
+import { getTenantClient } from "@/lib/tenant-supabase";
 import OpenAI from "openai";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +52,8 @@ Amounts shown as ₹ or Rs. CGST+SGST = GST in most cases.
 Return ONLY valid JSON. No markdown, no code blocks, no explanation.`;
 
 export async function POST(req: NextRequest) {
+  const supabase = getTenantClient(req);
+  if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
@@ -105,15 +107,24 @@ export async function POST(req: NextRequest) {
       expense = JSON.parse(result.choices[0].message.content || "{}");
 
     } else if (mime === "application/pdf") {
-      // pdf-parse v2: class-based API — no test-file loading side-effects
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { PDFParse } = require("pdf-parse") as {
-        PDFParse: new (opts: { data: Buffer }) => { getText(): Promise<{ text: string; total: number }> }
-      };
+      // pdfjs-dist: pure JS, zero native deps — works in Vercel serverless
+      const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
+      GlobalWorkerOptions.workerSrc = "";
 
-      const parser  = new PDFParse({ data: buffer });
-      const pdfData = await parser.getText();
-      const text    = pdfData.text?.trim() || "";
+      const pdf = await getDocument({
+        data: new Uint8Array(buffer),
+        useWorkerFetch: false,
+        isEvalSupported: false,
+        useSystemFonts: true,
+      }).promise;
+
+      let text = "";
+      for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+        const page    = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map((item) => ("str" in item ? item.str : "")).join(" ") + "\n";
+      }
+      text = text.trim();
 
       if (text.length < 80) {
         return NextResponse.json({
@@ -125,7 +136,7 @@ export async function POST(req: NextRequest) {
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user",   content: `[PDF Receipt – ${pdfData.total} page(s)]\n${text.slice(0, 6000)}` },
+          { role: "user",   content: `[PDF Receipt – ${pdf.numPages} page(s)]\n${text.slice(0, 6000)}` },
         ],
         response_format: { type: "json_object" },
         max_tokens: 600,

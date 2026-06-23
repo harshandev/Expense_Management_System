@@ -7,12 +7,14 @@
  * the OpenAI key is not configured.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getTenantClient } from "@/lib/tenant-supabase";
 import OpenAI from "openai";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  const supabase = getTenantClient(req);
+  if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { searchParams } = new URL(req.url);
   const q      = (searchParams.get("q") || "").trim();
   const userId = searchParams.get("userId") || null;

@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { NextRequest, NextResponse } from "next/server";
+import { getTenantClient } from "@/lib/tenant-supabase";
 import OpenAI from "openai";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,9 @@ const FALLBACK_INSIGHTS = [
   { type: "warning",     icon: "⚠️", title: "Connect OpenAI key",      message: "Add your OpenAI API key in .env.local to enable live, personalised AI-generated financial insights." },
 ];
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const supabase = getTenantClient(req);
+  if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "your_openai_key_here") {
     return NextResponse.json({ insights: FALLBACK_INSIGHTS });
   }

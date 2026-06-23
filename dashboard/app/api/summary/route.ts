@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { NextRequest, NextResponse } from "next/server";
+import { getTenantClient } from "@/lib/tenant-supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,9 @@ const SMART_BUDGETS: Record<string, number> = {
   Education: 3000, Investment: 10000, Other: 3000,
 };
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
+  const supabase = getTenantClient(req);
+  if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { searchParams } = new URL(req.url);
   const monthParam = searchParams.get("month");   // e.g. "2026-03"
   const userId     = searchParams.get("userId");  // filter by specific user (admin use)

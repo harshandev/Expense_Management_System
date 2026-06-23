@@ -8,13 +8,15 @@
  * SHA-256 file hash for future duplicate detection.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getTenantClient } from "@/lib/tenant-supabase";
 
 export const dynamic = "force-dynamic";
 
 const WEB_PHONE = "web_upload";
 
 export async function POST(req: NextRequest) {
+  const supabase = getTenantClient(req);
+  if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const body = await req.json() as {
       merchant:    string;

@@ -5,7 +5,7 @@
  * Returns structured sections + 3 concrete action items.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getTenantClient } from "@/lib/tenant-supabase";
 import OpenAI from "openai";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,8 @@ const BUDGETS: Record<string, number> = {
 };
 
 export async function GET(req: NextRequest) {
+  const supabase = getTenantClient(req);
+  if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { searchParams } = new URL(req.url);
   const month  = searchParams.get("month");
   const userId = searchParams.get("userId") || null;

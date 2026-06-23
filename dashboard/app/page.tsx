@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import {
   AreaChart, Area, PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, RadialBarChart, RadialBar,
@@ -9,7 +9,7 @@ import {
   X, Send, Sparkles, AlertTriangle, Lightbulb, Trophy, Zap,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronRight, Target,
   BarChart2, Receipt, Brain, Clock, Flame, CheckCircle, UserCircle, ChevronDown,
-  Upload, FileImage, FilePlus,
+  Upload, FileImage, FilePlus, Pencil, Trash2,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -128,6 +128,13 @@ export default function Dashboard() {
   const [userName,      setUserName]      = useState("");
   const [nameInput,     setNameInput]     = useState("");
   const [showNameModal,     setShowNameModal]     = useState(false);
+  const [userRole,      setUserRole]      = useState<"admin"|"viewer"|null>(null);
+
+  // Edit / delete transaction
+  type EditTxn = { id:string; merchant:string; amount:string; category:string; subcategory:string; description:string; expense_date:string };
+  const [editTxn,      setEditTxn]      = useState<EditTxn|null>(null);
+  const [deleteTxnId,  setDeleteTxnId]  = useState<string|null>(null);
+  const [txnSaving,    setTxnSaving]    = useState(false);
   const [pendingUploadFile, setPendingUploadFile] = useState<File|null>(null); // held while name modal is open
 
   // User picker (admin: switch between users)
@@ -215,6 +222,33 @@ export default function Dashboard() {
     }
     return opts.reverse(); // newest first
   })();
+
+  // ── Transaction edit / delete ──────────────────────────────────────────
+  const saveEdit = async () => {
+    if (!editTxn) return;
+    setTxnSaving(true);
+    const res = await fetch(`/api/transactions/${editTxn.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...editTxn, amount: Number(editTxn.amount) }),
+    });
+    setTxnSaving(false);
+    if (res.ok) { setEditTxn(null); load(selMonth); showToast("Transaction updated ✅", "success"); }
+    else        { showToast("Failed to update", "error"); }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTxnId) return;
+    const res = await fetch(`/api/transactions/${deleteTxnId}`, { method: "DELETE" });
+    if (res.ok) { setDeleteTxnId(null); load(selMonth); showToast("Transaction deleted", "info"); }
+    else        { showToast("Failed to delete", "error"); }
+  };
+
+  // ── Auth ───────────────────────────────────────────────────────────────
+  const logout = useCallback(async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }, []);
 
   // ── Toast helper ───────────────────────────────────────────────────────
   const showToast = (message: string, type: Toast["type"] = "info") => {
@@ -455,7 +489,14 @@ export default function Dashboard() {
   };
 
   // ── Effects ────────────────────────────────────────────────────────────
-  useEffect(() => { load(selMonth, true); loadInsights(); loadUsers(); }, []);
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => setUserRole(d.role))
+      .catch(() => { window.location.href = "/login"; });
+    load(selMonth, true); loadInsights(); loadUsers();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => { chatEnd.current?.scrollIntoView({behavior:"smooth"}); }, [history]);
   useEffect(() => {
     const saved = localStorage.getItem("emsi_username");
@@ -549,7 +590,7 @@ export default function Dashboard() {
             </div>
           </div>
           <nav className="hidden md:flex bg-gray-100 rounded-xl p-1 gap-0.5">
-            {TABS.map(t=>(
+            {TABS.filter(t => t !== "Upload" || userRole === "admin").map(t=>(
               <button key={t} onClick={()=>setTab(t)}
                 className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t?"bg-white text-indigo-600 shadow-sm":"text-gray-500 hover:text-gray-700"}`}>
                 {t}
@@ -557,6 +598,12 @@ export default function Dashboard() {
             ))}
           </nav>
           <div className="flex items-center gap-2">
+            {/* Role badge */}
+            {userRole && (
+              <span className={`hidden sm:inline text-xs font-semibold px-2 py-1 rounded-full ${userRole === "admin" ? "bg-indigo-50 text-indigo-600" : "bg-gray-100 text-gray-500"}`}>
+                {userRole}
+              </span>
+            )}
             {/* User / Name button */}
             <button onClick={()=>{ setNameInput(userName); setShowNameModal(true); }}
               title={userName ? `Logged in as ${userName}` : "Set your name"}
@@ -569,7 +616,7 @@ export default function Dashboard() {
               <RefreshCw size={16}/>
             </button>
             {/* Admin: switch between users */}
-            {users.length > 0 && (
+            {userRole === "admin" && users.length > 0 && (
               <div className="relative hidden sm:flex items-center">
                 <select
                   value={selectedUserId}
@@ -584,9 +631,17 @@ export default function Dashboard() {
                 <ChevronDown size={11} className="absolute right-2.5 text-gray-400 pointer-events-none"/>
               </div>
             )}
-            <button onClick={()=>{ resetUpload(); setTab("Upload"); }}
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
-              <Upload size={15}/><span className="hidden sm:inline">Upload</span>
+            {userRole === "admin" && (
+              <button onClick={()=>{ resetUpload(); setTab("Upload"); }}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
+                <Upload size={15}/><span className="hidden sm:inline">Upload</span>
+              </button>
+            )}
+            {/* Logout */}
+            <button onClick={logout}
+              title="Sign out"
+              className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+              <X size={16}/>
             </button>
             <a href="https://wa.me/14155238886" target="_blank" rel="noreferrer"
               className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
@@ -893,8 +948,8 @@ export default function Dashboard() {
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2.5">
-                        {/* View receipt button — only when receipt exists */}
+                      <div className="flex items-center gap-2">
+                        {/* View receipt */}
                         {t.receipt_url && (
                           <button
                             onClick={()=>setReceiptView({
@@ -912,6 +967,21 @@ export default function Dashboard() {
                           </button>
                         )}
                         <p className="font-bold text-gray-900 text-sm">₹{Number(t.amount).toLocaleString("en-IN")}</p>
+                        {/* Admin-only: edit + delete */}
+                        {userRole === "admin" && (
+                          <>
+                            <button
+                              onClick={()=>setEditTxn({ id:t.id, merchant:t.merchant||"", amount:String(t.amount), category:t.category, subcategory:"", description:t.description||"", expense_date:t.display_date })}
+                              className="p-1.5 text-gray-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors flex-shrink-0">
+                              <Pencil size={13}/>
+                            </button>
+                            <button
+                              onClick={()=>setDeleteTxnId(t.id)}
+                              className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0">
+                              <Trash2 size={13}/>
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1908,6 +1978,69 @@ export default function Dashboard() {
       )}
 
       {/* ── Receipt Lightbox Modal ────────────────────────────────────── */}
+      {/* ── Edit Transaction Modal ──────────────────────────────────────── */}
+      {editTxn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h3 className="font-bold text-gray-900">Edit Transaction</h3>
+              <button onClick={()=>setEditTxn(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"><X size={16}/></button>
+            </div>
+            <div className="p-6 space-y-4">
+              {[
+                { label:"Merchant",    key:"merchant",     type:"text"   },
+                { label:"Amount (₹)",  key:"amount",       type:"number" },
+                { label:"Date",        key:"expense_date", type:"date"   },
+                { label:"Description", key:"description",  type:"text"   },
+              ].map(({ label, key, type }) => (
+                <div key={key} className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">{label}</label>
+                  <input
+                    type={type}
+                    value={editTxn[key as keyof typeof editTxn]}
+                    onChange={e=>setEditTxn({...editTxn,[key]:e.target.value})}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                  />
+                </div>
+              ))}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-500">Category</label>
+                <select
+                  value={editTxn.category}
+                  onChange={e=>setEditTxn({...editTxn,category:e.target.value})}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 transition-all"
+                >
+                  {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button onClick={()=>setEditTxn(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors">Cancel</button>
+              <button onClick={saveEdit} disabled={txnSaving} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold transition-colors">
+                {txnSaving ? "Saving…" : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Confirm Dialog ────────────────────────────────────────── */}
+      {deleteTxnId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Trash2 size={20} className="text-red-500"/>
+            </div>
+            <h3 className="font-bold text-gray-900 mb-1">Delete transaction?</h3>
+            <p className="text-sm text-gray-400 mb-6">This cannot be undone.</p>
+            <div className="flex gap-3">
+              <button onClick={()=>setDeleteTxnId(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors">Cancel</button>
+              <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-semibold transition-colors">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {receiptView && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
