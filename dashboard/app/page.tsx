@@ -9,7 +9,7 @@ import {
   X, Send, Sparkles, AlertTriangle, Lightbulb, Trophy, Zap,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronRight, Target,
   BarChart2, Receipt, Brain, Clock, Flame, CheckCircle, UserCircle, ChevronDown,
-  Upload, FileImage, FilePlus, Pencil, Trash2,
+  Upload, FileImage, FilePlus, Pencil, Trash2, LogOut, Languages,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -159,6 +159,10 @@ export default function Dashboard() {
   const [loadingBudgets,   setLoadingBudgets]  = useState(false);
   const [budgetApplied,    setBudgetApplied]   = useState(false);
 
+  // Inline budget editing
+  const [editingBudgetCat, setEditingBudgetCat] = useState<string|null>(null);
+  const [editingBudgetVal, setEditingBudgetVal] = useState<string>("");
+
   // Monthly report
   interface ReportSection { heading: string; body: string; }
   interface ReportData {
@@ -169,6 +173,16 @@ export default function Dashboard() {
   const [reportOpen,    setReportOpen]    = useState(false);
   const [report,        setReport]        = useState<{report:ReportData;monthLabel:string;total:number;count:number;momPct:number}|null>(null);
   const [reportLoading, setReportLoading] = useState(false);
+
+  // Insight filters — language + per-user
+  const [insightLang,   setInsightLang]   = useState<"en"|"hi">("en");
+  const [insightUserId, setInsightUserId] = useState<string>("");
+  const insightLangRef   = useRef<"en"|"hi">("en");
+  const insightUserIdRef = useRef<string>("");
+
+  // WhatsApp number for profile linking
+  const [whatsappInput, setWhatsappInput] = useState("");
+  const [whatsappPhone, setWhatsappPhone] = useState("");
 
   // Upload tab state
   type UploadStage = "idle"|"analyzing"|"review"|"saving"|"success"|"error";
@@ -263,8 +277,11 @@ export default function Dashboard() {
     if (!n) return;
     setUserName(n);
     localStorage.setItem("emsi_username", n);
+    const wa = whatsappInput.trim();
+    if (wa) { setWhatsappPhone(wa); localStorage.setItem("emsi_whatsapp", wa); }
     setShowNameModal(false);
     setNameInput("");
+    setWhatsappInput("");
     showToast(`Welcome, ${n}! 👋`, "success");
     // If a file was waiting on the name, start uploading it now
     if (pendingUploadFile) {
@@ -387,9 +404,15 @@ export default function Dashboard() {
       .catch(() => { setFirstLoad(false); setDataLoading(false); showToast("Failed to load data. Check your connection.", "error"); });
   };
 
-  const loadInsights = () => {
+  const loadInsights = (opts?: { lang?: "en"|"hi"; userId?: string }) => {
+    const lang   = opts?.lang   ?? insightLangRef.current;
+    const userId = opts?.userId ?? insightUserIdRef.current;
     setILoading(true);
-    fetch("/api/insights")
+    const params = new URLSearchParams();
+    if (lang === "hi") params.set("lang", "hi");
+    if (userId) params.set("userId", userId);
+    const qs = params.toString();
+    fetch(`/api/insights${qs ? `?${qs}` : ""}`)
       .then(r => r.json())
       .then(d => { setInsights(d.insights||[]); setILoading(false); })
       .catch(() => { setILoading(false); showToast("Couldn't load AI insights.", "error"); });
@@ -437,6 +460,19 @@ export default function Dashboard() {
     localStorage.setItem("emsi_budgets", JSON.stringify(budgets));
     setBudgetSuggestion(null);
     showToast("AI budgets applied! ✅", "success");
+  };
+
+  const saveBudgetEdit = (cat: string) => {
+    const val = parseInt(editingBudgetVal.replace(/[^\d]/g, ""), 10);
+    if (!isNaN(val) && val > 0) {
+      const updated = { ...customBudgets, [cat]: val };
+      setCustomBudgets(updated);
+      setBudgetApplied(true);
+      localStorage.setItem("emsi_budgets", JSON.stringify(updated));
+      showToast(`${cat} budget set to ₹${val.toLocaleString("en-IN")} ✅`, "success");
+    }
+    setEditingBudgetCat(null);
+    setEditingBudgetVal("");
   };
 
   // ── Monthly Report ─────────────────────────────────────────────────────
@@ -501,6 +537,8 @@ export default function Dashboard() {
   useEffect(() => {
     const saved = localStorage.getItem("emsi_username");
     if (saved) setUserName(saved);
+    const savedWa = localStorage.getItem("emsi_whatsapp");
+    if (savedWa) setWhatsappPhone(savedWa);
   }, []);
 
   // ── Chat ───────────────────────────────────────────────────────────────
@@ -637,11 +675,10 @@ export default function Dashboard() {
                 <Upload size={15}/><span className="hidden sm:inline">Upload</span>
               </button>
             )}
-            {/* Logout */}
+            {/* Sign Out */}
             <button onClick={logout}
-              title="Sign out"
-              className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-              <X size={16}/>
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 border border-gray-200 hover:border-red-200 px-3 py-1.5 rounded-xl transition-colors font-medium">
+              <LogOut size={14}/><span className="hidden sm:inline">Sign Out</span>
             </button>
             <a href="https://wa.me/14155238886" target="_blank" rel="noreferrer"
               className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-sm">
@@ -728,9 +765,6 @@ export default function Dashboard() {
           <KpiCard icon={Receipt}  label="Avg Transaction" color="bg-amber-500"
             value={`₹${data.avgExpense.toLocaleString("en-IN")}`}
             sub={`Max ₹${data.maxExpense.toLocaleString("en-IN")}`}/>
-          <KpiCard icon={Activity} label="Health Score"  color="bg-emerald-500"
-            value={`${data.healthScore}/100`}
-            sub={data.healthScore>=70?"Excellent 🎉":data.healthScore>=50?"Fair 📈":"Needs Work 💪"}/>
         </div>
 
         {/* ══════════════════ OVERVIEW TAB ══════════════════════════════ */}
@@ -790,12 +824,26 @@ export default function Dashboard() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-white">AI Financial Insights</h3>
-                    <p className="text-indigo-400 text-xs">GPT-4o mini · Personalised for your data</p>
+                    <p className="text-indigo-400 text-xs">AI-Powered · Personalised for your data</p>
                   </div>
                 </div>
-                <button onClick={loadInsights} className="text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors">
-                  <RefreshCw size={11}/> Regenerate
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center bg-white/10 rounded-lg overflow-hidden border border-white/20">
+                    <button
+                      onClick={() => { insightLangRef.current="en"; setInsightLang("en"); loadInsights({ lang:"en", userId: insightUserIdRef.current }); }}
+                      className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${insightLang==="en"?"bg-white/20 text-white font-semibold":"text-indigo-300 hover:text-white"}`}>
+                      <Languages size={11}/> EN
+                    </button>
+                    <button
+                      onClick={() => { insightLangRef.current="hi"; setInsightLang("hi"); loadInsights({ lang:"hi", userId: insightUserIdRef.current }); }}
+                      className={`text-xs px-2.5 py-1.5 transition-colors ${insightLang==="hi"?"bg-white/20 text-white font-semibold":"text-indigo-300 hover:text-white"}`}>
+                      हिं
+                    </button>
+                  </div>
+                  <button onClick={()=>loadInsights()} className="text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors">
+                    <RefreshCw size={11}/> Regenerate
+                  </button>
+                </div>
               </div>
               {iLoading ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -944,6 +992,9 @@ export default function Dashboard() {
                             )}
                             {(t.metadata as MetaShape|null)?.billed_to && (
                               <span className="text-emerald-500"> · 📋 {(t.metadata as MetaShape).billed_to}</span>
+                            )}
+                            {(t.metadata as MetaShape|null)?.order_id && (
+                              <span className="text-gray-400"> · #{String((t.metadata as MetaShape).order_id).slice(0,16)}</span>
                             )}
                           </p>
                         </div>
@@ -1160,7 +1211,35 @@ export default function Dashboard() {
                   <div className="flex items-end justify-between mb-2">
                     <div>
                       <p className="text-2xl font-bold text-gray-900">₹{b.spent.toLocaleString("en-IN")}</p>
-                      <p className="text-xs text-gray-400">of ₹{b.budget.toLocaleString("en-IN")} budget</p>
+                      {/* Inline budget threshold editor */}
+                      {editingBudgetCat === b.category ? (
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className="text-xs text-gray-400">₹</span>
+                          <input
+                            autoFocus
+                            value={editingBudgetVal}
+                            onChange={e=>setEditingBudgetVal(e.target.value)}
+                            onKeyDown={e=>{ if(e.key==="Enter") saveBudgetEdit(b.category); if(e.key==="Escape"){ setEditingBudgetCat(null); setEditingBudgetVal(""); } }}
+                            placeholder={String(b.budget)}
+                            className="w-24 border border-indigo-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                          <button onClick={()=>saveBudgetEdit(b.category)}
+                            className="text-xs bg-indigo-600 text-white px-2 py-1 rounded-lg hover:bg-indigo-700 transition-colors font-medium">
+                            Save
+                          </button>
+                          <button onClick={()=>{ setEditingBudgetCat(null); setEditingBudgetVal(""); }}
+                            className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+                            <X size={11}/>
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={()=>{ setEditingBudgetCat(b.category); setEditingBudgetVal(String(b.budget)); }}
+                          className="flex items-center gap-1 text-xs text-gray-400 hover:text-indigo-600 group mt-0.5">
+                          <span>of ₹{b.budget.toLocaleString("en-IN")} budget</span>
+                          <Pencil size={10} className="opacity-0 group-hover:opacity-100 transition-opacity"/>
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
@@ -1190,14 +1269,55 @@ export default function Dashboard() {
                 </div>
                 <div>
                   <h3 className="font-semibold text-white text-lg">AI Financial Intelligence</h3>
-                  <p className="text-indigo-400 text-sm">Powered by GPT-4o mini · Analysing your real spending data</p>
+                  <p className="text-indigo-400 text-sm">AI-Powered · Analysing your real spending data</p>
                 </div>
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex items-center gap-2 flex-wrap">
+                  {/* Per-user picker — admin only */}
+                  {userRole === "admin" && users.length > 0 && (
+                    <div className="relative">
+                      <select
+                        value={insightUserId}
+                        onChange={e => {
+                          const uid = e.target.value;
+                          insightUserIdRef.current = uid;
+                          setInsightUserId(uid);
+                          loadInsights({ userId: uid, lang: insightLangRef.current });
+                        }}
+                        className="appearance-none text-xs bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg pl-3 pr-7 py-1.5 text-indigo-200 cursor-pointer focus:outline-none transition-colors">
+                        <option value="">👥 All users</option>
+                        {users.map(u => (
+                          <option key={u.id} value={u.id}>{u.label}</option>
+                        ))}
+                      </select>
+                      <ChevronDown size={11} className="absolute right-2.5 top-2 text-indigo-300 pointer-events-none"/>
+                    </div>
+                  )}
+                  {/* Language toggle EN / हि */}
+                  <div className="flex items-center bg-white/10 rounded-lg overflow-hidden border border-white/20">
+                    <button
+                      onClick={() => {
+                        insightLangRef.current = "en";
+                        setInsightLang("en");
+                        loadInsights({ lang: "en", userId: insightUserIdRef.current });
+                      }}
+                      className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${insightLang === "en" ? "bg-white/20 text-white font-semibold" : "text-indigo-300 hover:text-white"}`}>
+                      <Languages size={11}/> EN
+                    </button>
+                    <button
+                      onClick={() => {
+                        insightLangRef.current = "hi";
+                        setInsightLang("hi");
+                        loadInsights({ lang: "hi", userId: insightUserIdRef.current });
+                      }}
+                      className={`text-xs px-2.5 py-1.5 transition-colors ${insightLang === "hi" ? "bg-white/20 text-white font-semibold" : "text-indigo-300 hover:text-white"}`}>
+                      हिं
+                    </button>
+                  </div>
                   <button onClick={generateReport}
                     className="text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors">
                     <Receipt size={12}/> Monthly Report
                   </button>
-                  <button onClick={loadInsights} className="text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors">
+                  <button onClick={() => loadInsights()} className="text-xs text-indigo-300 hover:text-white bg-white/10 px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors">
                     <RefreshCw size={12}/> Regenerate
                   </button>
                 </div>
@@ -1358,7 +1478,7 @@ export default function Dashboard() {
                   <Brain size={34} className="text-indigo-600 animate-pulse"/>
                 </div>
                 <p className="font-bold text-gray-900 text-xl mb-1">Scanning your receipt…</p>
-                <p className="text-gray-400 text-sm mb-2">GPT-4o is reading merchant, amount, date and category</p>
+                <p className="text-gray-400 text-sm mb-2">AI is reading merchant, amount, date and category</p>
                 {uploadFileName && <p className="text-xs text-indigo-400 font-medium">{uploadFileName}</p>}
                 <div className="flex justify-center gap-2 mt-6">
                   {[0,1,2,3].map(i=>(
@@ -1750,7 +1870,7 @@ export default function Dashboard() {
         )}
 
         <p className="text-center text-xs text-gray-400 mt-8 pb-4">
-          EMSI · Expense Management System Intelligence · Powered by GPT-4o Vision + GPT-4o mini
+          EMSI · Expense Management System Intelligence
         </p>
       </main>
 
@@ -1861,7 +1981,18 @@ export default function Dashboard() {
               onChange={e=>setNameInput(e.target.value)}
               onKeyDown={e=>e.key==="Enter"&&saveName()}
               placeholder="e.g. Kishore"
-              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 mb-4"
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 mb-3"
+            />
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">
+              WhatsApp Number <span className="text-gray-300 font-normal">(optional — links to your bot identity)</span>
+            </label>
+            <input
+              value={whatsappInput}
+              onChange={e=>setWhatsappInput(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&saveName()}
+              placeholder="e.g. 9876543210"
+              type="tel"
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-100 mb-4"
             />
             <div className="flex gap-2">
               {!pendingUploadFile && (
@@ -1898,7 +2029,7 @@ export default function Dashboard() {
                   </div>
                   <div>
                     <p className="text-white font-bold">{report?.monthLabel || monthLabel} — Financial Report</p>
-                    {report && <p className="text-indigo-200 text-xs">₹{report.total.toLocaleString("en-IN")} · {report.count} transactions · GPT-4o</p>}
+                    {report && <p className="text-indigo-200 text-xs">₹{report.total.toLocaleString("en-IN")} · {report.count} transactions</p>}
                   </div>
                 </div>
                 {!reportLoading && (
@@ -1920,7 +2051,7 @@ export default function Dashboard() {
                     <Brain size={26} className="text-indigo-500 animate-pulse"/>
                   </div>
                   <p className="font-semibold text-gray-800">Generating your report…</p>
-                  <p className="text-sm text-gray-400">GPT-4o is analysing {data?.count} transactions</p>
+                  <p className="text-sm text-gray-400">AI is analysing {data?.count} transactions</p>
                   <div className="flex gap-2">
                     {[0,1,2,3].map(i=><div key={i} className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay:`${i*120}ms`}}/>)}
                   </div>

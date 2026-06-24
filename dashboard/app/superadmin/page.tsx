@@ -175,6 +175,14 @@ export default function SuperAdminPage() {
   const [tenants,        setTenants]        = useState<TenantRow[]>([]);
   const [loadingTenants, setLoadingTenants] = useState(false);
 
+  // Edit modal
+  const [editTenant,    setEditTenant]    = useState<TenantRow | null>(null);
+  const [editName,      setEditName]      = useState("");
+  const [editTier,      setEditTier]      = useState<Tier>("basic");
+  const [editActive,    setEditActive]    = useState(true);
+  const [editSaving,    setEditSaving]    = useState(false);
+  const [editError,     setEditError]     = useState("");
+
   // Auto-slug from name
   useEffect(() => {
     setSlug(name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
@@ -198,6 +206,33 @@ export default function SuperAdminPage() {
     }
     setLoadingTenants(false);
   }, []);
+
+  const openEdit = (t: TenantRow) => {
+    setEditTenant(t);
+    setEditName(t.name);
+    setEditTier(t.tier as Tier);
+    setEditActive(t.active);
+    setEditError("");
+  };
+
+  const saveEdit = async () => {
+    if (!editTenant) return;
+    setEditSaving(true);
+    setEditError("");
+    const res = await fetch(`/api/superadmin/tenants/${editTenant.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: editName, tier: editTier, active: editActive }),
+    });
+    setEditSaving(false);
+    if (res.ok) {
+      setEditTenant(null);
+      loadTenants();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      setEditError(d.error || "Update failed");
+    }
+  };
 
   const unlock = async () => {
     setChecking(true);
@@ -470,7 +505,7 @@ export default function SuperAdminPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-900">
                     <tr>
-                      {["Company", "Slug", "Tier", "Users", "WA Numbers", "Created", "Status"].map(h => (
+                      {["Company", "Slug", "Tier", "Users", "WA Numbers", "Created", "Status", ""].map(h => (
                         <th key={h} className="px-4 py-3 text-left text-xs text-gray-400 font-semibold uppercase tracking-wider">
                           {h}
                         </th>
@@ -497,6 +532,13 @@ export default function SuperAdminPage() {
                             {t.active ? "Active" : "Inactive"}
                           </span>
                         </td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => openEdit(t)}
+                            className="text-xs text-indigo-400 hover:text-indigo-200 border border-indigo-800 hover:border-indigo-600 px-2.5 py-1 rounded-lg transition-colors">
+                            Edit
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -507,6 +549,69 @@ export default function SuperAdminPage() {
         )}
 
       </div>
+
+      {/* ── Edit Tenant Modal ──────────────────────────────────────────────── */}
+      {editTenant && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setEditTenant(null)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md space-y-5 shadow-2xl"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-white font-semibold text-lg">Edit — {editTenant.slug}</h3>
+              <button onClick={() => setEditTenant(null)} className="text-gray-500 hover:text-gray-300 text-xl leading-none">×</button>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-gray-500">Company Name</label>
+              <input value={editName} onChange={e => setEditName(e.target.value)} className={inputCls}/>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-gray-500">Subscription Tier</label>
+              <select value={editTier} onChange={e => setEditTier(e.target.value as Tier)} className={inputCls}>
+                {(Object.keys(TIERS) as Tier[]).map(t => (
+                  <option key={t} value={t}>
+                    {TIERS[t].label} — {TIERS[t].whatsapp_slots === -1 ? "Unlimited" : TIERS[t].whatsapp_slots} WA · {TIERS[t].dashboard_viewers === -1 ? "Unlimited" : TIERS[t].dashboard_viewers} viewers
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2 flex-wrap pt-1">
+                {(Object.entries(TIERS[editTier].features) as [string, boolean][]).map(([feat, on]) => (
+                  <span key={feat} className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${on ? "bg-emerald-900 text-emerald-300" : "bg-gray-800 text-gray-500 line-through"}`}>
+                    {feat.replace(/_/g, " ")}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between bg-gray-800/60 rounded-xl px-4 py-3">
+              <div>
+                <p className="text-sm text-white font-medium">Account Status</p>
+                <p className="text-xs text-gray-500 mt-0.5">{editActive ? "Tenant can log in and use the dashboard" : "All access blocked"}</p>
+              </div>
+              <button
+                onClick={() => setEditActive(v => !v)}
+                className={`relative inline-flex w-11 h-6 rounded-full transition-colors flex-shrink-0 ${editActive ? "bg-emerald-500" : "bg-gray-600"}`}>
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${editActive ? "translate-x-5" : "translate-x-0"}`}/>
+              </button>
+            </div>
+
+            {editError && <p className="text-xs text-red-400">{editError}</p>}
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setEditTenant(null)}
+                className="flex-1 py-2.5 rounded-xl border border-gray-700 text-gray-400 hover:text-white text-sm transition-colors">
+                Cancel
+              </button>
+              <button onClick={saveEdit} disabled={editSaving || !editName.trim()}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold transition-colors">
+                {editSaving ? "Saving…" : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

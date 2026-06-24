@@ -24,6 +24,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ insights: FALLBACK_INSIGHTS });
   }
 
+  const { searchParams } = new URL(req.url);
+  const lang   = searchParams.get("lang") === "hi" ? "hi" : "en";
+  const userId = searchParams.get("userId") || null;
+
   try {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const now = new Date();
@@ -39,11 +43,16 @@ export async function GET(req: NextRequest) {
     const daysElapsed      = now.getDate();
     const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
+    const baseQuery = (start: string, end?: string) => {
+      let q = supabase.from("transactions").select("*").gte("created_at", start);
+      if (end) q = q.lt("created_at", end);
+      if (userId) q = q.eq("user_id", userId);
+      return q;
+    };
+
     const [{ data: current }, { data: previous }] = await Promise.all([
-      supabase.from("transactions").select("*").gte("created_at", `${yearMonth}-01`),
-      supabase.from("transactions").select("*")
-        .gte("created_at", `${prevMonth}-01`)
-        .lt("created_at", `${yearMonth}-01`),
+      baseQuery(`${yearMonth}-01`),
+      baseQuery(`${prevMonth}-01`, `${yearMonth}-01`),
     ]);
 
     if (!current?.length) {
@@ -99,8 +108,35 @@ export async function GET(req: NextRequest) {
       .map(t => ({ merchant: t.merchant, amount: Math.round(Number(t.amount)), category: t.category }));
 
     const monthLabel = now.toLocaleString("default", { month: "long", year: "numeric" });
+    const isHindi = lang === "hi";
 
-    const prompt = `
+    const prompt = isHindi ? `
+${monthLabel} के लिए इस भारतीय उपयोगकर्ता का वास्तविक खर्च विश्लेषण करें:
+
+सारांश:
+- इस महीने: ₹${Math.round(totalCurrent)}, ${current.length} लेनदेन (${daysElapsed}/${totalDaysInMonth} दिन)
+- पिछले महीने: ₹${Math.round(totalPrevious)} — बदलाव: ${momPct > 0 ? "+" : ""}${momPct}%
+- दैनिक औसत: ₹${Math.round(dailyAvg)} → अनुमानित माह-अंत: ₹${Math.round(projected)}
+
+श्रेणी बनाम बजट:
+${categoryAnalysis.map(c => `- ${c.name}: खर्च ₹${c.spent} / बजट ₹${c.budget} (${c.pct}%${c.over ? " — बजट से अधिक" : ""})`).join("\n")}
+
+शीर्ष दुकानें:
+${topMerchants.map(m => `- ${m.name}: ₹${m.total} · ${m.count} बार · औसत ₹${m.avg}`).join("\n")}
+
+सबसे बड़े खर्च:
+${topTx.map(t => `- ${t.merchant}: ₹${t.amount} (${t.category})`).join("\n")}
+
+ठीक 4 insights बनाएं (एक-एक: warning, tip, achievement, prediction)।
+नियम:
+- असली merchant नाम, ₹ राशि और प्रतिशत का उपयोग करें
+- actionable सुझाव दें — उपयोगकर्ता को बताएं क्या करना है
+- message अधिकतम 35 शब्द, title अधिकतम 6 शब्द
+- सभी title और message हिंदी में लिखें
+
+केवल valid JSON लौटाएं (कोई markdown नहीं):
+{"insights":[{"type":"warning","icon":"emoji","title":"≤6 शब्द","message":"≤35 शब्द असली संख्या के साथ"},{"type":"tip",...},{"type":"achievement",...},{"type":"prediction",...}]}`
+    : `
 Analyze this Indian user's real spending for ${monthLabel}:
 
 OVERVIEW:
@@ -130,14 +166,18 @@ Return ONLY valid JSON (no markdown, no explanation):
     const controller = new AbortController();
     const timeout    = setTimeout(() => controller.abort(), 12000);
 
+    const systemMsg = isHindi
+      ? "आप एक भारतीय व्यक्तिगत वित्त AI हैं। केवल valid JSON आउटपुट करें, और कुछ नहीं।"
+      : "You are an Indian personal finance AI. Output ONLY valid JSON, nothing else.";
+
     const response = await openai.chat.completions.create({
       model:   "gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are an Indian personal finance AI. Output ONLY valid JSON, nothing else." },
+        { role: "system", content: systemMsg },
         { role: "user",   content: prompt },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 600,
+      max_tokens: 700,
     });
 
     clearTimeout(timeout);
