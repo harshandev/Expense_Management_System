@@ -197,6 +197,7 @@ export default function Dashboard() {
   interface EditableExpense {
     merchant: string; amount: string; category: string;
     subcategory: string; date: string; description: string; confidence: number;
+    billed_to: string;
   }
   interface UploadDuplicate {
     id: string; merchant: string; amount: number;
@@ -350,6 +351,7 @@ export default function Dashboard() {
       setUploadFileHash(json.fileHash ?? "");
       setUploadDuplicate(json.duplicate ?? null);
       setUploadMetadata((e.metadata as Record<string,unknown>) ?? null);
+      const meta = e.metadata as Record<string,unknown> | null;
       setEditedExpense({
         merchant:    String(e.merchant    || ""),
         amount:      String(e.amount      || ""),
@@ -358,6 +360,7 @@ export default function Dashboard() {
         date:        String(e.date        || new Date().toISOString().slice(0,10)),
         description: String(e.description || ""),
         confidence:  Number(e.confidence  || 0),
+        billed_to:   String(meta?.billed_to || ""),
       });
       setUploadStage("review");
     } catch {
@@ -378,7 +381,7 @@ export default function Dashboard() {
           amount:      Number(editedExpense.amount),
           receiptUrl:  uploadReceiptUrl,
           fileName:    uploadFileName,
-          metadata:    uploadMetadata,
+          metadata:    { ...(uploadMetadata || {}), ...(editedExpense.billed_to?.trim() ? { billed_to: editedExpense.billed_to.trim() } : {}) },
           receiptHash: uploadFileHash,
           uploadedBy:  userName || null,
         }),
@@ -1708,13 +1711,6 @@ export default function Dashboard() {
                         Logging as {userName}
                       </div>
                     )}
-                    {/* Billed-to from receipt (if AI extracted it) */}
-                    {uploadMetadata && (uploadMetadata as MetaShape).billed_to && (
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
-                        <Receipt size={11}/>
-                        Billed to: {String((uploadMetadata as MetaShape).billed_to)}
-                      </div>
-                    )}
                   </div>
 
                   {/* Right: Edit form */}
@@ -1784,6 +1780,17 @@ export default function Dashboard() {
                         value={editedExpense.description}
                         onChange={e=>setEditedExpense(p=>p?{...p,description:e.target.value}:p)}
                         placeholder="e.g. Butter chicken + garlic naan"
+                        className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                      />
+                    </div>
+
+                    {/* Billed To */}
+                    <div>
+                      <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Billed To <span className="font-normal text-gray-300">(optional)</span></label>
+                      <input
+                        value={editedExpense.billed_to}
+                        onChange={e=>setEditedExpense(p=>p?{...p,billed_to:e.target.value}:p)}
+                        placeholder="e.g. Jangid Brothers Pvt Ltd"
                         className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
                       />
                     </div>
