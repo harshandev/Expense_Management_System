@@ -151,7 +151,9 @@ export async function POST(req: NextRequest) {
       .from("receipts")
       .upload(fileName, buffer, { contentType: mime, upsert: false });
 
-    if (!storageErr) {
+    if (storageErr) {
+      console.error("Storage upload error:", storageErr);
+    } else {
       const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(fileName);
       receiptUrl = urlData?.publicUrl ?? null;
     }
