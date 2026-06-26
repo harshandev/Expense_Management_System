@@ -9,7 +9,7 @@ import {
   X, Send, Sparkles, AlertTriangle, Lightbulb, Trophy, Zap,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronRight, Target,
   BarChart2, Receipt, Brain, Clock, Flame, CheckCircle, UserCircle, ChevronDown,
-  Upload, FileImage, FilePlus, Pencil, Trash2, LogOut, Languages, Users,
+  Upload, FileImage, FilePlus, Pencil, Trash2, LogOut, Languages,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -663,20 +663,34 @@ export default function Dashboard() {
               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
               <RefreshCw size={16}/>
             </button>
-            {/* Admin: switch between users */}
+            {/* Admin: user filter pills */}
             {userRole === "admin" && users.length > 0 && (
-              <div className="relative hidden sm:flex items-center">
-                <select
-                  value={selectedUserId}
-                  onChange={e=>handleUserSelect(e.target.value)}
-                  className="appearance-none text-xs bg-gray-100 hover:bg-indigo-50 border border-gray-200 hover:border-indigo-300 rounded-xl pl-3 pr-7 py-1.5 text-gray-600 cursor-pointer focus:outline-none focus:border-indigo-400 transition-colors font-medium"
-                >
-                  <option value="">👥 All users</option>
-                  {users.map(u=>(
-                    <option key={u.id} value={u.id}>{u.label} ({u.count})</option>
-                  ))}
-                </select>
-                <ChevronDown size={11} className="absolute right-2.5 text-gray-400 pointer-events-none"/>
+              <div className="hidden sm:flex items-center gap-1.5">
+                <button
+                  onClick={()=>handleUserSelect("")}
+                  className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-colors border ${
+                    !selectedUserId
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-gray-100 text-gray-500 border-gray-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300"
+                  }`}>
+                  All
+                </button>
+                {users.map(u=>{
+                  const pill = u.label === "Web Upload" ? "Web" : u.label.length > 8 ? u.label.slice(-5) : u.label;
+                  return (
+                    <button key={u.id}
+                      onClick={()=>handleUserSelect(u.id)}
+                      title={`${u.label} · ${u.count} transactions`}
+                      className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-colors border ${
+                        selectedUserId === u.id
+                          ? "bg-indigo-600 text-white border-indigo-600"
+                          : "bg-gray-100 text-gray-500 border-gray-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300"
+                      }`}>
+                      {pill}
+                      <span className="ml-1 opacity-60">({u.count})</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
             {userRole === "admin" && (
@@ -884,37 +898,6 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-
-            {/* Team Activity — admin only */}
-            {userRole === "admin" && users.length > 0 && (
-              <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="w-7 h-7 bg-indigo-50 rounded-lg flex items-center justify-center">
-                    <Users size={14} className="text-indigo-500"/>
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-gray-900 text-sm">Team Activity</h3>
-                    <p className="text-xs text-gray-400">Who's uploading expenses</p>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  {users.map((u, i) => (
-                    <div key={u.id} className="flex items-center gap-2.5 bg-gray-50 rounded-xl px-4 py-2.5 border border-gray-100">
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                        style={{background: COLORS[i % COLORS.length]}}>
-                        {u.label === "Web Upload" ? "🌐" : u.label.slice(0,1).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-800">
-                          {u.label === "Web Upload" ? "Web Upload" : u.label}
-                        </p>
-                        <p className="text-xs text-gray-400">{u.count} transaction{u.count !== 1 ? "s" : ""}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Bottom row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
