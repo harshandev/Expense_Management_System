@@ -28,8 +28,9 @@ export async function GET(req: NextRequest) {
   const supabase = getTenantClient(req);
   if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { searchParams } = new URL(req.url);
-  const monthParam = searchParams.get("month");   // e.g. "2026-03"
-  const userId     = searchParams.get("userId");  // filter by specific user (admin use)
+  const monthParam     = searchParams.get("month");        // e.g. "2026-03"
+  const userId         = searchParams.get("userId");       // filter by WhatsApp user_id
+  const uploaderName   = searchParams.get("uploaderName"); // filter by metadata.uploaded_by
 
   const now = new Date();
   // Parse selected month or default to current
@@ -62,8 +63,8 @@ export async function GET(req: NextRequest) {
   let prevQ = supabase.from("transactions").select("*")
     .gte("created_at", `${prevStart}-01`)
     .lt("created_at",  `${yearMonth}-01`);
-  // Admin: filter by specific user when requested
-  if (userId) { currQ = currQ.eq("user_id", userId); prevQ = prevQ.eq("user_id", userId); }
+  if (userId)       { currQ = currQ.eq("user_id", userId); prevQ = prevQ.eq("user_id", userId); }
+  if (uploaderName) { currQ = currQ.filter("metadata->>uploaded_by", "eq", uploaderName); prevQ = prevQ.filter("metadata->>uploaded_by", "eq", uploaderName); }
 
   const [{ data: curr }, { data: prev }] = await Promise.all([currQ, prevQ]);
 

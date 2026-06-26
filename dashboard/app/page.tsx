@@ -140,8 +140,11 @@ export default function Dashboard() {
 
   // User picker (admin: switch between users)
   const [users,          setUsers]          = useState<UserRow[]>([]);
-  const [selectedUserId, setSelectedUserId] = useState<string>("");
+  const [selectedUserId,    setSelectedUserId]    = useState<string>("");
   const selectedUserIdRef = useRef<string>("");
+  const [selectedUploader,  setSelectedUploader]  = useState<string>("");
+  const selectedUploaderRef = useRef<string>("");
+  const [uploaderNames,     setUploaderNames]     = useState<string[]>([]);
 
   // Anomaly detection (set after upload save)
   const [uploadAnomaly,  setUploadAnomaly]  = useState<{level:"high"|"medium"|null;message:string}|null>(null);
@@ -394,10 +397,13 @@ export default function Dashboard() {
   };
 
   // ── Data loaders ───────────────────────────────────────────────────────
-  const load = (month: string, initial = false, forUserId?: string) => {
-    // If forUserId not passed, use the ref (avoids stale closure)
-    const uid = forUserId !== undefined ? forUserId : selectedUserIdRef.current;
-    const url = `/api/summary?month=${month}${uid ? `&userId=${uid}` : ""}`;
+  const load = (month: string, initial = false, forUserId?: string, forUploader?: string) => {
+    const uid      = forUserId   !== undefined ? forUserId   : selectedUserIdRef.current;
+    const uploader = forUploader !== undefined ? forUploader : selectedUploaderRef.current;
+    const params   = new URLSearchParams({ month });
+    if (uid)      params.set("userId",       uid);
+    if (uploader) params.set("uploaderName", uploader);
+    const url = `/api/summary?${params.toString()}`;
     initial ? setFirstLoad(true) : setDataLoading(true);
     fetch(url)
       .then(r => r.json())
@@ -423,6 +429,13 @@ export default function Dashboard() {
     fetch("/api/users")
       .then(r => r.json())
       .then(d => setUsers(d.users || []))
+      .catch(() => {});
+  };
+
+  const loadUploaders = () => {
+    fetch("/api/uploaders")
+      .then(r => r.json())
+      .then(d => setUploaderNames(d.uploaders || []))
       .catch(() => {});
   };
 
@@ -546,7 +559,7 @@ export default function Dashboard() {
         }
       })
       .catch(() => { window.location.href = "/login"; });
-    load(selMonth, true); loadInsights(); loadUsers();
+    load(selMonth, true); loadInsights(); loadUsers(); loadUploaders();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { chatEnd.current?.scrollIntoView({behavior:"smooth"}); }, [history]);
@@ -663,34 +676,26 @@ export default function Dashboard() {
               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
               <RefreshCw size={16}/>
             </button>
-            {/* Admin: user filter pills */}
-            {userRole === "admin" && users.length > 0 && (
-              <div className="hidden sm:flex items-center gap-1.5">
-                <button
-                  onClick={()=>handleUserSelect("")}
-                  className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-colors border ${
-                    !selectedUserId
-                      ? "bg-indigo-600 text-white border-indigo-600"
-                      : "bg-gray-100 text-gray-500 border-gray-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300"
-                  }`}>
-                  All
-                </button>
-                {users.map(u=>{
-                  const pill = u.label === "Web Upload" ? "Web" : u.label.length > 8 ? u.label.slice(-5) : u.label;
-                  return (
-                    <button key={u.id}
-                      onClick={()=>handleUserSelect(u.id)}
-                      title={`${u.label} · ${u.count} transactions`}
-                      className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-colors border ${
-                        selectedUserId === u.id
-                          ? "bg-indigo-600 text-white border-indigo-600"
-                          : "bg-gray-100 text-gray-500 border-gray-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300"
-                      }`}>
-                      {pill}
-                      <span className="ml-1 opacity-60">({u.count})</span>
-                    </button>
-                  );
-                })}
+            {/* Admin: filter by uploader name */}
+            {userRole === "admin" && uploaderNames.length > 0 && (
+              <div className="relative hidden sm:flex items-center">
+                <select
+                  value={selectedUploader}
+                  onChange={e => {
+                    const name = e.target.value;
+                    selectedUploaderRef.current = name;
+                    setSelectedUploader(name);
+                    setCatFilter("All");
+                    load(selMonthRef.current, false, "", name);
+                  }}
+                  className="appearance-none text-xs bg-gray-100 hover:bg-indigo-50 border border-gray-200 hover:border-indigo-300 rounded-xl pl-3 pr-7 py-1.5 text-gray-600 cursor-pointer focus:outline-none focus:border-indigo-400 transition-colors font-medium"
+                >
+                  <option value="">👥 All members</option>
+                  {uploaderNames.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                <ChevronDown size={11} className="absolute right-2.5 text-gray-400 pointer-events-none"/>
               </div>
             )}
             {userRole === "admin" && (
