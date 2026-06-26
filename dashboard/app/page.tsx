@@ -9,7 +9,7 @@ import {
   X, Send, Sparkles, AlertTriangle, Lightbulb, Trophy, Zap,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronRight, Target,
   BarChart2, Receipt, Brain, Clock, Flame, CheckCircle, UserCircle, ChevronDown,
-  Upload, FileImage, FilePlus, Pencil, Trash2, LogOut, Languages,
+  Upload, FileImage, FilePlus, Pencil, Trash2, LogOut, Languages, Users,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -884,6 +884,37 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
+
+            {/* Team Activity — admin only */}
+            {userRole === "admin" && users.length > 0 && (
+              <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-7 h-7 bg-indigo-50 rounded-lg flex items-center justify-center">
+                    <Users size={14} className="text-indigo-500"/>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900 text-sm">Team Activity</h3>
+                    <p className="text-xs text-gray-400">Who's uploading expenses</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  {users.map((u, i) => (
+                    <div key={u.id} className="flex items-center gap-2.5 bg-gray-50 rounded-xl px-4 py-2.5 border border-gray-100">
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                        style={{background: COLORS[i % COLORS.length]}}>
+                        {u.label === "Web Upload" ? "🌐" : u.label.slice(0,1).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">
+                          {u.label === "Web Upload" ? "Web Upload" : u.label}
+                        </p>
+                        <p className="text-xs text-gray-400">{u.count} transaction{u.count !== 1 ? "s" : ""}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Bottom row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
