@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 const PUBLIC_PREFIXES = ["/login", "/superadmin", "/api/auth/", "/api/superadmin/"];
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Always allow public paths
   if (PUBLIC_PREFIXES.some(p => pathname === p || pathname.startsWith(p))) {
     return NextResponse.next();
   }
