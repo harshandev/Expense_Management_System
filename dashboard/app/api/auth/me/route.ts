@@ -24,5 +24,6 @@ export async function GET(req: NextRequest) {
     tenant_id: session.tenant_id,
     role:      session.role,
     name:      session.name,
+    email:     session.email,
   });
 }

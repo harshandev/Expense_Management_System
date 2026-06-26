@@ -13,6 +13,7 @@ export type SessionPayload = {
   supabase_url:     string;
   supabase_anon_key: string;
   name:             string;
+  email:            string;
 };
 
 function sign(payload: SessionPayload): string {

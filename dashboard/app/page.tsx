@@ -126,6 +126,7 @@ export default function Dashboard() {
   const [catFilter,     setCatFilter]     = useState("All");
   const [toasts,        setToasts]        = useState<Toast[]>([]);
   const [userName,      setUserName]      = useState("");
+  const [userEmail,     setUserEmail]     = useState("");
   const [nameInput,     setNameInput]     = useState("");
   const [showNameModal,     setShowNameModal]     = useState(false);
   const [userRole,      setUserRole]      = useState<"admin"|"viewer"|null>(null);
@@ -276,9 +277,9 @@ export default function Dashboard() {
     const n = nameInput.trim();
     if (!n) return;
     setUserName(n);
-    localStorage.setItem("emsi_username", n);
+    if (userEmail) localStorage.setItem(`emsi_username_${userEmail}`, n);
     const wa = whatsappInput.trim();
-    if (wa) { setWhatsappPhone(wa); localStorage.setItem("emsi_whatsapp", wa); }
+    if (wa) { setWhatsappPhone(wa); if (userEmail) localStorage.setItem(`emsi_whatsapp_${userEmail}`, wa); }
     setShowNameModal(false);
     setNameInput("");
     setWhatsappInput("");
@@ -528,18 +529,27 @@ export default function Dashboard() {
   useEffect(() => {
     fetch("/api/auth/me")
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(d => setUserRole(d.role))
+      .then(d => {
+        setUserRole(d.role);
+        if (d.email) {
+          setUserEmail(d.email);
+          const key = `emsi_username_${d.email}`;
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            setUserName(saved);
+          } else {
+            const firstName = d.email.split("@")[0].split(".")[0];
+            setUserName(firstName.charAt(0).toUpperCase() + firstName.slice(1));
+          }
+          const savedWa = localStorage.getItem(`emsi_whatsapp_${d.email}`);
+          if (savedWa) setWhatsappPhone(savedWa);
+        }
+      })
       .catch(() => { window.location.href = "/login"; });
     load(selMonth, true); loadInsights(); loadUsers();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { chatEnd.current?.scrollIntoView({behavior:"smooth"}); }, [history]);
-  useEffect(() => {
-    const saved = localStorage.getItem("emsi_username");
-    if (saved) setUserName(saved);
-    const savedWa = localStorage.getItem("emsi_whatsapp");
-    if (savedWa) setWhatsappPhone(savedWa);
-  }, []);
 
   // ── Chat ───────────────────────────────────────────────────────────────
   const sendChat = async (quickMsg?: string) => {
@@ -628,7 +638,7 @@ export default function Dashboard() {
             </div>
           </div>
           <nav className="hidden md:flex bg-gray-100 rounded-xl p-1 gap-0.5">
-            {TABS.filter(t => t !== "Upload" || userRole === "admin").map(t=>(
+            {TABS.map(t=>(
               <button key={t} onClick={()=>setTab(t)}
                 className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t?"bg-white text-indigo-600 shadow-sm":"text-gray-500 hover:text-gray-700"}`}>
                 {t}

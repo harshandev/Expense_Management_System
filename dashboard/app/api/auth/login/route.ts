@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     supabase_url:     tenant.supabase_url,
     supabase_anon_key: tenant.supabase_anon_key,
     name:             user.name,
+    email:            email.trim().toLowerCase(),
   };
 
   const res = NextResponse.json({ ok: true, role: user.role, name: user.name, tenant: tenant.name });
