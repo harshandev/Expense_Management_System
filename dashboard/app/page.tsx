@@ -1661,18 +1661,16 @@ export default function Dashboard() {
                     {/* Category */}
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Category</label>
-                      <div className="relative">
-                        <select
-                          value={editedExpense.category}
-                          onChange={e=>setEditedExpense(p=>p?{...p,category:e.target.value}:p)}
-                          className="w-full appearance-none border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer pr-8"
-                        >
-                          {CATEGORIES.map(c=>(
-                            <option key={c} value={c}>{CAT_EMOJI[c]} {c}</option>
-                          ))}
-                        </select>
-                        <ChevronDown size={13} className="absolute right-3 top-3.5 text-gray-400 pointer-events-none"/>
-                      </div>
+                      <input
+                        list="upload-categories"
+                        value={editedExpense.category}
+                        onChange={e=>setEditedExpense(p=>p?{...p,category:e.target.value}:p)}
+                        placeholder="Pick or type a category…"
+                        className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                      />
+                      <datalist id="upload-categories">
+                        {CATEGORIES.map(c=><option key={c} value={c}/>)}
+                      </datalist>
                     </div>
 
                     {/* Description */}
@@ -2165,13 +2163,16 @@ export default function Dashboard() {
               ))}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Category</label>
-                <select
+                <input
+                  list="edit-categories"
                   value={editTxn.category}
                   onChange={e=>setEditTxn({...editTxn,category:e.target.value})}
+                  placeholder="Pick or type a category…"
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 transition-all"
-                >
-                  {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
-                </select>
+                />
+                <datalist id="edit-categories">
+                  {CATEGORIES.map(c=><option key={c} value={c}/>)}
+                </datalist>
               </div>
             </div>
             <div className="flex gap-3 px-6 pb-6">
