@@ -166,6 +166,10 @@ export default function Dashboard() {
   // Inline budget editing
   const [editingBudgetCat, setEditingBudgetCat] = useState<string|null>(null);
   const [editingBudgetVal, setEditingBudgetVal] = useState<string>("");
+  const [customCategories, setCustomCategories] = useState<string[]>([]);
+  const [showAddCat,       setShowAddCat]       = useState(false);
+  const [newCatName,       setNewCatName]       = useState("");
+  const [newCatBudget,     setNewCatBudget]     = useState("");
 
   // Monthly report
   interface ReportSection { heading: string; body: string; }
@@ -504,11 +508,41 @@ export default function Dashboard() {
     setReportLoading(false);
   };
 
-  // Load custom budgets from localStorage on mount
+  // Load custom budgets + custom categories from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem("emsi_budgets");
     if (saved) { try { setCustomBudgets(JSON.parse(saved)); setBudgetApplied(true); } catch {} }
+    const savedCats = localStorage.getItem("emsi_custom_categories");
+    if (savedCats) { try { setCustomCategories(JSON.parse(savedCats)); } catch {} }
   }, []);
+
+  const addCustomCategory = () => {
+    const name = newCatName.trim();
+    if (!name) return;
+    const allExisting = [...(CATEGORIES as readonly string[]), ...customCategories];
+    if (allExisting.map(c => c.toLowerCase()).includes(name.toLowerCase())) {
+      showToast("Category already exists", "error"); return;
+    }
+    const updatedCats = [...customCategories, name];
+    setCustomCategories(updatedCats);
+    localStorage.setItem("emsi_custom_categories", JSON.stringify(updatedCats));
+    const budget = parseInt(newCatBudget.replace(/[^\d]/g, ""), 10);
+    if (!isNaN(budget) && budget > 0) {
+      const updatedBudgets = { ...customBudgets, [name]: budget };
+      setCustomBudgets(updatedBudgets);
+      setBudgetApplied(true);
+      localStorage.setItem("emsi_budgets", JSON.stringify(updatedBudgets));
+    }
+    setNewCatName(""); setNewCatBudget(""); setShowAddCat(false);
+    showToast(`"${name}" category created ✅`, "success");
+  };
+
+  const removeCustomCategory = (name: string) => {
+    const updated = customCategories.filter(c => c !== name);
+    setCustomCategories(updated);
+    localStorage.setItem("emsi_custom_categories", JSON.stringify(updated));
+    showToast(`"${name}" removed`, "info");
+  };
 
   // ── Month navigation ───────────────────────────────────────────────────
   const changeMonth = (dir: -1|1) => {
@@ -613,14 +647,23 @@ export default function Dashboard() {
     {name:"Spend Control",    value:data.scoreBreakdown.spendControl,    fill:"#f59e0b"},
   ];
 
-  // Budget tracker — use custom (AI-suggested) budgets when applied
-  const activeBudgetTracker = Object.keys(customBudgets).length > 0
+  // Budget tracker — use custom (AI-suggested) budgets when applied, then append custom categories
+  const baseTracker = Object.keys(customBudgets).length > 0
     ? data.categoryChart.map(c => {
         const budget = customBudgets[c.name] || 3000;
         const pct    = Math.min(Math.round((c.value / budget) * 100), 150);
         return { category: c.name, spent: c.value, budget, pct, over: c.value > budget };
       }).sort((a, b) => b.pct - a.pct)
     : data.budgetTracker;
+  const activeBudgetTracker = [
+    ...baseTracker,
+    ...customCategories
+      .filter(cat => !baseTracker.find(b => b.category.toLowerCase() === cat.toLowerCase()))
+      .map(cat => {
+        const budget = customBudgets[cat] || 3000;
+        return { category: cat, spent: 0, budget, pct: 0, over: false };
+      }),
+  ];
 
   // Behavioral patterns — derived from existing heatmap data
   const dowMap: Record<string,number> = {};
@@ -1232,10 +1275,21 @@ export default function Dashboard() {
                     <div className="flex items-center gap-2">
                       <span className="text-xl">{CAT_EMOJI[b.category]||"📦"}</span>
                       <span className="font-semibold text-gray-900">{b.category}</span>
+                      {customCategories.includes(b.category) && (
+                        <span className="text-xs bg-indigo-50 text-indigo-500 border border-indigo-100 px-1.5 py-0.5 rounded-full font-medium">custom</span>
+                      )}
                     </div>
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${b.over?"bg-red-100 text-red-700":"bg-green-100 text-green-700"}`}>
-                      {b.over?"Over budget":"On track"}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {customCategories.includes(b.category) && (
+                        <button onClick={()=>removeCustomCategory(b.category)}
+                          className="text-gray-300 hover:text-red-500 transition-colors p-1 rounded-lg hover:bg-red-50">
+                          <Trash2 size={12}/>
+                        </button>
+                      )}
+                      <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${b.over?"bg-red-100 text-red-700":"bg-green-100 text-green-700"}`}>
+                        {b.over?"Over budget":b.spent===0?"No spend yet":"On track"}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-end justify-between mb-2">
                     <div>
@@ -1283,6 +1337,55 @@ export default function Dashboard() {
                   )}
                 </div>
               ))}
+
+              {/* ── Add custom category ───────────────────────────────── */}
+              {!showAddCat ? (
+                <button
+                  onClick={()=>setShowAddCat(true)}
+                  className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium bg-indigo-50 hover:bg-indigo-100 border border-dashed border-indigo-300 rounded-2xl px-5 py-4 w-full transition-colors mt-1">
+                  <span className="text-xl leading-none">+</span> Create custom category
+                </button>
+              ) : (
+                <div className="bg-white rounded-2xl border border-indigo-200 shadow-sm p-5 mt-1">
+                  <p className="font-semibold text-gray-900 text-sm mb-4">New Custom Category</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                    <div>
+                      <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Category Name</label>
+                      <input
+                        autoFocus
+                        value={newCatName}
+                        onChange={e=>setNewCatName(e.target.value)}
+                        onKeyDown={e=>{ if(e.key==="Enter") addCustomCategory(); if(e.key==="Escape"){ setShowAddCat(false); setNewCatName(""); setNewCatBudget(""); } }}
+                        placeholder="e.g. Office Supplies, GST, Vendor"
+                        className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Monthly Budget <span className="font-normal text-gray-300">(optional)</span></label>
+                      <input
+                        value={newCatBudget}
+                        onChange={e=>setNewCatBudget(e.target.value)}
+                        onKeyDown={e=>{ if(e.key==="Enter") addCustomCategory(); if(e.key==="Escape"){ setShowAddCat(false); setNewCatName(""); setNewCatBudget(""); } }}
+                        placeholder="₹ e.g. 5000"
+                        className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={addCustomCategory}
+                      disabled={!newCatName.trim()}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold py-2.5 rounded-xl transition-colors">
+                      Create Category
+                    </button>
+                    <button
+                      onClick={()=>{ setShowAddCat(false); setNewCatName(""); setNewCatBudget(""); }}
+                      className="px-4 py-2.5 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-sm transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1670,6 +1773,7 @@ export default function Dashboard() {
                       />
                       <datalist id="upload-categories">
                         {CATEGORIES.map(c=><option key={c} value={c}/>)}
+                        {customCategories.map(c=><option key={c} value={c}/>)}
                       </datalist>
                     </div>
 
@@ -2172,6 +2276,7 @@ export default function Dashboard() {
                 />
                 <datalist id="edit-categories">
                   {CATEGORIES.map(c=><option key={c} value={c}/>)}
+                  {customCategories.map(c=><option key={c} value={c}/>)}
                 </datalist>
               </div>
             </div>
