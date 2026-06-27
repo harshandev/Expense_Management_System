@@ -10,7 +10,10 @@ export async function POST(req: NextRequest) {
   if (!supabase) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { transactions, uploadedBy } = await req.json() as {
-    transactions: { merchant: string; amount: number; category: string; date: string; description: string }[];
+    transactions: {
+      merchant: string; amount: number; category: string;
+      date: string; description: string; receipt_url?: string | null;
+    }[];
     uploadedBy: string | null;
   };
 
@@ -37,8 +40,9 @@ export async function POST(req: NextRequest) {
     description:  t.description || "",
     expense_date: t.date,
     currency:     "INR",
-    raw_input:    "[excel_import]",
-    metadata:     { uploaded_by: uploadedBy || null, source: "excel" },
+    raw_input:    "[bulk_import]",
+    receipt_url:  t.receipt_url || null,
+    metadata:     { uploaded_by: uploadedBy || null, source: t.receipt_url ? "multi_upload" : "excel" },
   }));
 
   const { data, error } = await supabase.from("transactions").insert(rows).select("id");

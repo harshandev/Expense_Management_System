@@ -194,7 +194,7 @@ export default function Dashboard() {
 
   // Upload tab state
   type UploadStage = "idle"|"analyzing"|"review"|"saving"|"success"|"error"|"excel-review"|"excel-importing"|"excel-success";
-  interface ExcelRow { _id: string; selected: boolean; merchant: string; amount: string; category: string; date: string; description: string; }
+  interface ExcelRow { _id: string; selected: boolean; merchant: string; amount: string; category: string; date: string; description: string; receipt_url?: string | null; }
   interface EditableExpense {
     merchant: string; amount: string; category: string;
     subcategory: string; date: string; description: string; confidence: number;
@@ -346,6 +346,40 @@ export default function Dashboard() {
     }
   };
 
+  const analyzeMultiple = async (files: File[]) => {
+    setUploadStage("analyzing");
+    setUploadFileName(`${files.length} files`);
+    try {
+      const results = await Promise.all(files.map(async (file, i) => {
+        const form = new FormData();
+        form.append("file", file);
+        const res  = await fetch("/api/upload", { method: "POST", body: form });
+        const json = await res.json();
+        if (!res.ok || !json.expense) return null;
+        const e = json.expense as Record<string, unknown>;
+        const meta = e.metadata as Record<string, unknown> | null;
+        return {
+          _id: String(i),
+          selected: true,
+          merchant:    String(e.merchant    || ""),
+          amount:      String(e.amount      || ""),
+          category:    String(e.category    || "Other"),
+          date:        String(e.date        || new Date().toISOString().slice(0, 10)),
+          description: String(e.description || ""),
+          receipt_url: (json.receiptUrl as string | null) ?? null,
+          billed_to:   String(meta?.billed_to || ""),
+        } as ExcelRow;
+      }));
+      const rows = results.filter(Boolean) as ExcelRow[];
+      if (!rows.length) { setUploadError("Could not extract expenses from any of the uploaded files."); setUploadStage("error"); return; }
+      setExcelRows(rows);
+      setUploadStage("excel-review");
+    } catch {
+      setUploadError("Network error. Please try again.");
+      setUploadStage("error");
+    }
+  };
+
   const analyzeExcel = async (file: File) => {
     setUploadStage("analyzing");
     try {
@@ -376,7 +410,7 @@ export default function Dashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transactions: selected.map(r => ({ merchant: r.merchant, amount: Number(r.amount), category: r.category, date: r.date, description: r.description })),
+          transactions: selected.map(r => ({ merchant: r.merchant, amount: Number(r.amount), category: r.category, date: r.date, description: r.description, receipt_url: r.receipt_url ?? null })),
           uploadedBy: userName || null,
         }),
       });
@@ -1626,7 +1660,13 @@ export default function Dashboard() {
                   <div
                     onDragOver={e=>{e.preventDefault();setUploadDrag(true);}}
                     onDragLeave={()=>setUploadDrag(false)}
-                    onDrop={e=>{e.preventDefault();setUploadDrag(false);const f=e.dataTransfer.files[0];if(f)handleUploadFile(f);}}
+                    onDrop={e=>{
+                      e.preventDefault(); setUploadDrag(false);
+                      const files = e.dataTransfer.files;
+                      if (!files.length) return;
+                      if (files.length === 1) { handleUploadFile(files[0]); }
+                      else { if (!userName.trim()) { setShowNameModal(true); return; } resetUpload(); analyzeMultiple(Array.from(files)); }
+                    }}
                     onClick={()=>uploadInputRef.current?.click()}
                     className={`border-2 border-dashed rounded-2xl p-14 text-center cursor-pointer transition-all ${
                       uploadDrag?"border-indigo-400 bg-indigo-50 scale-[1.01]":"border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40"
@@ -1666,8 +1706,12 @@ export default function Dashboard() {
                 <div className="w-20 h-20 bg-gradient-to-br from-indigo-100 to-violet-100 rounded-3xl flex items-center justify-center mx-auto mb-5 shadow-sm">
                   <Brain size={34} className="text-indigo-600 animate-pulse"/>
                 </div>
-                <p className="font-bold text-gray-900 text-xl mb-1">Scanning your receipt…</p>
-                <p className="text-gray-400 text-sm mb-2">AI is reading merchant, amount, date and category</p>
+                <p className="font-bold text-gray-900 text-xl mb-1">
+                  {uploadFileName?.includes("files") ? `Scanning ${uploadFileName}…` : "Scanning your receipt…"}
+                </p>
+                <p className="text-gray-400 text-sm mb-2">
+                  {uploadFileName?.includes("files") ? "AI is analysing all files in parallel" : "AI is reading merchant, amount, date and category"}
+                </p>
                 {uploadFileName && <p className="text-xs text-indigo-400 font-medium">{uploadFileName}</p>}
                 <div className="flex justify-center gap-2 mt-6">
                   {[0,1,2,3].map(i=>(
@@ -2167,8 +2211,18 @@ export default function Dashboard() {
             )}
 
             {/* Hidden file input */}
-            <input ref={uploadInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf,.xlsx,.xls,.csv"
-              className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)handleUploadFile(f);e.target.value="";}}/>
+            <input ref={uploadInputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf,.xlsx,.xls,.csv"
+              className="hidden" onChange={e=>{
+                const files = e.target.files;
+                if (!files || !files.length) return;
+                if (files.length === 1) { handleUploadFile(files[0]); }
+                else {
+                  if (!userName.trim()) { setShowNameModal(true); return; }
+                  resetUpload();
+                  analyzeMultiple(Array.from(files));
+                }
+                e.target.value="";
+              }}/>
           </div>
         )}
 
