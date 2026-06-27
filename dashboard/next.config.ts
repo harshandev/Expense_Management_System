@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["unpdf", "pdfjs-dist"],
+  serverExternalPackages: ["unpdf", "pdfjs-dist", "xlsx"],
   turbopack: {},
 };
 

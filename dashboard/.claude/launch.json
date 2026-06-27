@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "emsi-dashboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "3005"],
+      "port": 3005,
+      "cwd": "/Users/kishoreharshankumar/growtharc/personal/Expense_Tracker_Intelligence/dashboard"
+    }
+  ]
+}

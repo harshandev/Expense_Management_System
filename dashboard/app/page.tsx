@@ -193,7 +193,8 @@ export default function Dashboard() {
   const [whatsappPhone, setWhatsappPhone] = useState("");
 
   // Upload tab state
-  type UploadStage = "idle"|"analyzing"|"review"|"saving"|"success"|"error";
+  type UploadStage = "idle"|"analyzing"|"review"|"saving"|"success"|"error"|"excel-review"|"excel-importing"|"excel-success";
+  interface ExcelRow { _id: string; selected: boolean; merchant: string; amount: string; category: string; date: string; description: string; }
   interface EditableExpense {
     merchant: string; amount: string; category: string;
     subcategory: string; date: string; description: string; confidence: number;
@@ -215,6 +216,8 @@ export default function Dashboard() {
   const [uploadMetadata,   setUploadMetadata]   = useState<Record<string,unknown>|null>(null);
   const [uploadFileHash,   setUploadFileHash]   = useState<string>("");
   const [showMetadata,     setShowMetadata]     = useState(false);
+  const [excelRows,        setExcelRows]        = useState<ExcelRow[]>([]);
+  const [excelImported,    setExcelImported]    = useState(0);
   const uploadInputRef = useRef<HTMLInputElement>(null);
 
   // Receipt viewer modal
@@ -315,28 +318,78 @@ export default function Dashboard() {
     setUploadStage("idle"); setUploadFile(null); setUploadPreview(null);
     setUploadReceiptUrl(null); setEditedExpense(null); setUploadError(""); setUploadFileName("");
     setUploadDuplicate(null); setUploadMetadata(null); setUploadFileHash(""); setShowMetadata(false);
-    setUploadAnomaly(null);
+    setUploadAnomaly(null); setExcelRows([]); setExcelImported(0);
   };
+
+  const isExcelFile = (file: File) =>
+    file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    file.type === "application/vnd.ms-excel" ||
+    file.type === "text/csv" ||
+    file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv");
 
   const handleUploadFile = (file: File) => {
     if (!file) return;
-    // Name is mandatory — gate the upload until the user sets one
-    if (!userName.trim()) {
-      setPendingUploadFile(file);
-      setShowNameModal(true);
-      return;
-    }
+    if (!userName.trim()) { setPendingUploadFile(file); setShowNameModal(true); return; }
     resetUpload();
     setUploadFile(file);
     setUploadFileName(file.name);
-    if (file.type.startsWith("image/")) {
-      const reader = new FileReader();
-      reader.onload = e => setUploadPreview(e.target?.result as string);
-      reader.readAsDataURL(file);
+    if (isExcelFile(file)) {
+      analyzeExcel(file);
+    } else {
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = e => setUploadPreview(e.target?.result as string);
+        reader.readAsDataURL(file);
+      }
+      setUploadStage("analyzing");
+      analyzeFile(file);
     }
+  };
+
+  const analyzeExcel = async (file: File) => {
     setUploadStage("analyzing");
-    // Kick off analysis immediately on file selection
-    analyzeFile(file);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res  = await fetch("/api/upload/excel", { method: "POST", body: form });
+      const json = await res.json();
+      if (!res.ok) { setUploadError(json.error || "Could not parse the file."); setUploadStage("error"); return; }
+      const rows: ExcelRow[] = json.transactions.map((t: { merchant: string; amount: number; category: string; date: string; description: string }, i: number) => ({
+        _id: String(i), selected: true,
+        merchant: t.merchant, amount: String(t.amount),
+        category: t.category, date: t.date, description: t.description,
+      }));
+      setExcelRows(rows);
+      setUploadStage("excel-review");
+    } catch {
+      setUploadError("Network error. Please try again.");
+      setUploadStage("error");
+    }
+  };
+
+  const importExcel = async () => {
+    const selected = excelRows.filter(r => r.selected);
+    if (!selected.length) { showToast("Select at least one row to import", "error"); return; }
+    setUploadStage("excel-importing");
+    try {
+      const res = await fetch("/api/upload/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transactions: selected.map(r => ({ merchant: r.merchant, amount: Number(r.amount), category: r.category, date: r.date, description: r.description })),
+          uploadedBy: userName || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setUploadError(json.error || "Import failed."); setUploadStage("error"); return; }
+      setExcelImported(json.imported);
+      setUploadStage("excel-success");
+      load(selMonthRef.current);
+      showToast(`${json.imported} transactions imported ✅`, "success");
+    } catch {
+      setUploadError("Network error. Please try again.");
+      setUploadStage("error");
+    }
   };
 
   const analyzeFile = async (file: File) => {
@@ -1589,9 +1642,10 @@ export default function Dashboard() {
                     </div>
                     <p className="font-semibold text-gray-800 text-lg mb-1">Drop your receipt here</p>
                     <p className="text-gray-400 text-sm mb-4">or click to browse files</p>
-                    <div className="flex justify-center gap-2">
+                    <div className="flex justify-center flex-wrap gap-2">
                       <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full font-medium">JPEG / PNG / WebP</span>
                       <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full font-medium">PDF Invoice</span>
+                      <span className="text-xs bg-emerald-50 text-emerald-600 border border-emerald-100 px-3 py-1 rounded-full font-medium">Excel / CSV</span>
                     </div>
                   </div>
                 </div>
@@ -2001,8 +2055,119 @@ export default function Dashboard() {
               </div>
             )}
 
+            {/* ── Excel review table ─────────────────────────────────── */}
+            {(uploadStage === "excel-review" || uploadStage === "excel-importing") && excelRows.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-gray-900">Review Import</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">{uploadFileName} · {excelRows.length} rows found · edit before importing</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={()=>setExcelRows(p=>p.map(r=>({...r,selected:true})))}
+                      className="text-xs text-indigo-600 hover:underline">Select all</button>
+                    <span className="text-gray-300">|</span>
+                    <button onClick={()=>setExcelRows(p=>p.map(r=>({...r,selected:false})))}
+                      className="text-xs text-gray-400 hover:underline">None</button>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100 bg-gray-50">
+                          <th className="w-10 px-3 py-3 text-left">
+                            <input type="checkbox"
+                              checked={excelRows.every(r=>r.selected)}
+                              onChange={e=>setExcelRows(p=>p.map(r=>({...r,selected:e.target.checked})))}
+                              className="rounded"/>
+                          </th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Merchant</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount (₹)</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Category</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {excelRows.map((row, i) => (
+                          <tr key={row._id} className={`border-b border-gray-50 last:border-0 ${!row.selected ? "opacity-40" : ""}`}>
+                            <td className="px-3 py-2">
+                              <input type="checkbox" checked={row.selected}
+                                onChange={e=>setExcelRows(p=>p.map((r,j)=>j===i?{...r,selected:e.target.checked}:r))}
+                                className="rounded"/>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input value={row.merchant}
+                                onChange={e=>setExcelRows(p=>p.map((r,j)=>j===i?{...r,merchant:e.target.value}:r))}
+                                className="w-full min-w-[120px] border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input value={row.amount} type="number" min="0"
+                                onChange={e=>setExcelRows(p=>p.map((r,j)=>j===i?{...r,amount:e.target.value}:r))}
+                                className="w-24 border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input value={row.category} list="excel-categories"
+                                onChange={e=>setExcelRows(p=>p.map((r,j)=>j===i?{...r,category:e.target.value}:r))}
+                                className="w-28 border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input value={row.date} type="date"
+                                onChange={e=>setExcelRows(p=>p.map((r,j)=>j===i?{...r,date:e.target.value}:r))}
+                                className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input value={row.description}
+                                onChange={e=>setExcelRows(p=>p.map((r,j)=>j===i?{...r,description:e.target.value}:r))}
+                                className="w-full min-w-[120px] border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <datalist id="excel-categories">
+                      {CATEGORIES.map(c=><option key={c} value={c}/>)}
+                      {customCategories.map(c=><option key={c} value={c}/>)}
+                    </datalist>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <button onClick={importExcel} disabled={uploadStage==="excel-importing" || !excelRows.some(r=>r.selected)}
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+                    {uploadStage==="excel-importing"
+                      ? <><RefreshCw size={15} className="animate-spin"/> Importing…</>
+                      : <><Upload size={15}/> Import {excelRows.filter(r=>r.selected).length} transactions</>}
+                  </button>
+                  <button onClick={resetUpload}
+                    className="px-5 py-3 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-sm transition-colors">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Excel success ──────────────────────────────────────── */}
+            {uploadStage === "excel-success" && (
+              <div className="text-center py-10 space-y-4">
+                <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mx-auto">
+                  <CheckCircle size={32} className="text-green-500"/>
+                </div>
+                <div>
+                  <p className="font-bold text-gray-900 text-lg">{excelImported} transactions imported!</p>
+                  <p className="text-sm text-gray-400 mt-1">All saved to your dashboard</p>
+                </div>
+                <button onClick={resetUpload}
+                  className="px-8 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-sm">
+                  Upload Another
+                </button>
+              </div>
+            )}
+
             {/* Hidden file input */}
-            <input ref={uploadInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+            <input ref={uploadInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf,.xlsx,.xls,.csv"
               className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)handleUploadFile(f);e.target.value="";}}/>
           </div>
         )}
